@@ -23,7 +23,33 @@ Nothing in this file may be copied from the custom pack's documentation without 
 | Which pack is installed | **[LIVE] resolved** | Marketplace pack. Instance brand `KOI`, both instances enabled |
 | The dataset name | **[LIVE] resolved** | **`koi_koi_raw`** — no longer an inference |
 | Whether `Fetch events` appears | **[LIVE] resolved** | Yes. `isFetchEvents: true` set and enabled on both instances |
-| Real behaviour of each command | **[LIVE] partially resolved** | The **API behind** all 13 commands was exercised read-only. The commands themselves could **not** be executed through XSIAM — see §6 |
+| Real behaviour of each command | **[LIVE] partially resolved** | The API behind **8 of the 13** commands was exercised read-only. The 5 state-changing commands were deliberately **not run**, and the commands themselves could **not** be executed through XSIAM — see §6 |
+
+### 1.1 Exactly which commands were exercised
+
+Stating this precisely, because "all 13 were verified" would be false.
+
+**Exercised against the live API (8):** `koi-policy-list`, `koi-allowlist-get`,
+`koi-blocklist-get`, `koi-inventory-list`, `koi-inventory-item-get`,
+`koi-inventory-item-endpoints-list`, `koi-inventory-search`, `koi-get-events`
+(both `/alerts` and `/audit-logs`).
+
+**Deliberately not run (5)** — every one changes tenant state:
+`koi-policy-status-update`, `koi-allowlist-items-add`, `koi-allowlist-items-remove`,
+`koi-blocklist-items-add`, `koi-blocklist-items-remove`.
+
+> ⚠️ **The pack flags only 2 of those 5 as harmful.** `execution: true` is set on
+> `koi-allowlist-items-remove` and `koi-blocklist-items-remove` only. The two **add** commands and
+> `koi-policy-status-update` (PUT `/policies/{id}`) mutate governance state with no such flag, so
+> they do not get the confirmation treatment that `execution: true` triggers. Treat "not flagged"
+> as "not flagged", not as "safe".
+
+> ⚠️ **`koi-get-events` is not safely repeatable either**, despite being a GET. The pack's own
+> description says it is "for development and debugging only, as it may produce duplicate events,
+> exceed API rate limits, or **disrupt the fetch mechanism**". Its `should_push_events` argument
+> (default `false`) **writes events into `koi_koi_raw` when set to `true`**. So of the 8 non-mutating
+> commands, 7 are freely repeatable and this one is not. Do not put it in a "safe to repeat" list
+> without that caveat.
 
 ---
 
@@ -40,6 +66,12 @@ Both instances are configured identically apart from their API key:
 | `max_fetch` | `5000` |
 | `eventFetchInterval` | `1` (minute) |
 | `insecure` / `proxy` | `false` / `false` |
+
+> ⚠️ **The event collector is disabled on XSOAR.** The YAML sets `isfetchevents: true`
+> (line 990) and then overrides it on the very next line with **`isfetchevents:xsoar: false`**
+> (line 991). Every Collect-section parameter is likewise `hidden: [xsoar]`. Event collection
+> therefore works on **XSIAM / platform only** — on an XSOAR tenant the pack is a command
+> integration and nothing else. `pack_metadata.json` still lists `xsoar` among its marketplaces.
 
 **Both instances run through an engine**, not direct tenant egress
 (engine `c3664d21-63fb-4b2c-b16c-56cd547a3d79`, `propagationLabels: ["all"]`). This matters: the
@@ -101,12 +133,22 @@ character-for-character on every command name, every argument (`name`, `required
 `isArray`, `predefined`) and every output context path.
 
 Counts, derived mechanically by `scripts/build_pack_json.py` (not transcribed): **13 commands**,
-**67 arguments**, **131 output declarations** spanning **68 distinct context paths**. The gap
-between 131 and 68 is real and worth knowing: 36 paths are declared by more than one command —
-all nine `Koi.Policy.*` paths appear in both `koi-policy-list` and `koi-policy-status-update`, and
-the 27 `Koi.Inventory.*` paths are declared identically by `koi-inventory-list`,
-`koi-inventory-item-get` and `koi-inventory-search`. Three commands writing the same context
-prefix means **the last command to run overwrites the previous one's context**.
+**67 arguments**, **131 output declarations** spanning **68 distinct context paths**.
+
+The gap between 131 and 68 is 63 *redundant declarations*, arising from **36 distinct paths that
+more than one command declares** (do not describe 63 as a number of paths):
+
+- All **9** `Koi.Policy.*` paths are declared by both `koi-policy-list` and
+  `koi-policy-status-update`.
+- All **27** `Koi.Inventory.*` item paths are declared identically by **three** commands:
+  `koi-inventory-list`, `koi-inventory-item-get` and `koi-inventory-search`.
+
+**Those three overwrite each other**: running one after another leaves only the last one's
+results in `Koi.Inventory`. Two `koi-inventory-list` calls with different filters in one playbook
+branch do not accumulate — the second replaces the first.
+
+`koi-inventory-item-endpoints-list` is **not** part of that collision. It writes only the 10
+nested `Koi.Inventory.Endpoint.*` paths and shares no context path with the other three.
 
 Four commands declare **no outputs at all** (`koi-allowlist-items-add` / `-remove`,
 `koi-blocklist-items-add` / `-remove`) — they return a war-room message only, so a playbook cannot
@@ -143,9 +185,19 @@ Base `https://api.prod.koi.security` + `/api/external/v2`. Auth: `Authorization:
 
 ---
 
-## 5. Two defects in the pack as shipped **[LIVE]**
+## 5. Findings from exercising the live API **[LIVE]**
 
-Both were found by exercising the live API and comparing it with what the pack declares.
+Five findings, of **three different kinds** — do not describe them all as "defects":
+
+| | Finding | Kind |
+|---|---|---|
+| 5.1 | The `view` dropdown omits three valid values | **Defect in the shipped pack** |
+| 5.2 | `command_examples.txt` ships a value the API rejects | **Defect in the shipped pack** |
+| 5.3 | `koi-inventory-search` needs a filter shape the pack never illustrates | Documentation gap |
+| 5.4 | Allowlist/blocklist responses carry no `total_count` | API response-shape observation |
+| 5.4a | An invalid key returns 401; no 403 was ever seen | Behaviour worth knowing |
+
+Only **5.1 and 5.2 are faults in the pack as published**.
 
 ### 5.1 The `view` dropdown omits three valid values
 
@@ -157,29 +209,69 @@ The API states its own contract in its 400 response:
 The YAML's `predefined` list for `view` offers only six. Missing: **`all_items`**,
 **`mcp_servers`**, **`repositories`**. Nothing in the YAML is *invalid* — the list is incomplete.
 
-This matters most for **`mcp_servers`**, the MCP-server audit case. It works when typed by hand
-(`view=mcp_servers` returned HTTP 200, `total_count` 21 on `KOI_PAET` and 42 on `KOI_PLTS`), but
-the XSOAR argument dropdown will never offer it.
+**All twelve values were probed individually on both instances** — the nine the API names, plus the
+three a reader might plausibly guess. Nothing in this table is inferred; the raw results are in
+`evidence/followup-probes.json`.
+
+| `view` value | In YAML dropdown | HTTP | `total_count` `KOI_PAET` | `KOI_PLTS` |
+|---|---|---|---|---|
+| `agentic_ai` | ✓ | 200 | 226 | 1,342 |
+| `ai_models` | ✓ | 200 | 3 | 28 |
+| `code_packages` | ✓ | 200 | 2,315 | 2,572 |
+| `extensions` | ✓ | 200 | 180 | 417 |
+| `os_packages` | ✓ | 200 | 350 | 393 |
+| `software` | ✓ | 200 | 406 | 1,046 |
+| **`mcp_servers`** | **✗** | 200 | 21 | 42 |
+| **`repositories`** | **✗** | 200 | 15 | 77 |
+| **`all_items`** | **✗** | 200 | **0** | **0** |
+| `browser_extensions` | ✗ | **400** | — | — |
+| `ide_extensions` | ✗ | **400** | — | — |
+| `packages` | ✗ | **400** | — | — |
+
+This matters most for **`mcp_servers`**, the MCP-server audit case: it works when typed by hand,
+but the XSOAR argument dropdown will never offer it. `repositories` is likewise real data (15 / 77
+items) that the dropdown hides.
+
+> **`all_items` is accepted but returned zero rows on both tenants**, while every other accepted
+> value returned real data. Its name implies "everything" and it delivers nothing. Treat an empty
+> result from `view=all_items` as expected behaviour here, not as an empty inventory — and prefer
+> omitting `view` entirely, which returned 3,447 / 5,644 items.
 
 ### 5.2 The pack's own command example is broken
 
-`Packs/Koi/Integrations/Koi/command_examples.txt` contains `view=browser_extensions`.
+`Packs/Koi/Integrations/Koi/command_examples.txt` contains **`view=browser_extensions`**.
 That value is in **neither** the YAML `predefined` list **nor** the API's accepted set; the live
 API rejects it with **HTTP 400**. Anyone copying the shipped example gets an error.
 
-`ide_extensions` and `packages` likewise return HTTP 400.
+`ide_extensions` and `packages` also return 400, but — unlike `browser_extensions` — **they do not
+appear in the shipped example**. They are simply values a reader might guess.
 
 ### 5.3 `koi-inventory-search` needs a structured filter
 
-An empty filter is rejected. The API requires the query-builder shape:
+The API requires the query-builder shape:
 
 ```json
 {"combinator": "and", "rules": [{"field": "risk_level", "operator": "=", "value": "high"}]}
 ```
 
 Verified working: that exact filter returned `total_count` 145 on `KOI_PAET`.
-The `filter_json` argument is documented as "query builder syntax" but the pack gives no example
-of the shape, and the failure mode is a bare HTTP 400.
+
+Three distinct failure modes, all verified — do not conflate them:
+
+| What happens | Result |
+|---|---|
+| Command run with neither `filter_json` nor `filter_raw_json_entry_id` | The **integration** stops it: `Koi.py` raises "Either 'filter_json' or 'filter_raw_json_entry_id' must be provided." No API call is made |
+| Filter present but malformed (e.g. `{}`) | API **400**, and the body names the problem: `filter.combinator must be one of the following values: and, or` … `filter.rules must be an array` |
+| `filter` key omitted from the API request entirely | API **500 Internal Server Error** — reachable only by calling the API directly, not through the command |
+
+The 400 is **not** opaque — it tells you exactly which keys are wrong. What the pack lacks is an
+*example* of the shape, not a usable error message.
+
+### 5.4a Authentication failure is unambiguous
+
+An invalid bearer token returns **HTTP 401** `{"message":"Unauthorized","statusCode":401}`
+(verified with a deliberately invalid key). No 403 was ever observed from this machine, so any
+claim that "403 means blocked egress" is **[UNVERIFIED]** here and must not be stated as fact.
 
 ### 5.4 Allowlist and blocklist responses carry no total
 
@@ -219,19 +311,66 @@ API path that fails) and compare against `evidence/command-sweep.json`.
 
 Recorded so later readers can tell whether a difference is a change or an error.
 
+> ⚠️ **These counts drift. Never quote one as an expected result.**
+> Two sweeps a few hours apart on 20 July 2026 returned different totals for the same query on
+> `KOI_PLTS`: inventory **5,644 → 5,646**, `view=software` **1,044 → 1,046**.
+>
+> The drift is **per tenant, not universal** — `KOI_PAET` returned 3,447 in both sweeps. And it is
+> **between** runs, never within one: probing twice inside a single run returned identical values
+> every time (recorded as `attempt_within_run` 1 and 2 in `evidence/followup-probes.json`). So this
+> is real inventory growth on one tenant, not instability in the API and not a fault in either sweep.
+>
+> Where the two evidence files disagree, `evidence/command-sweep.json` is the earlier reading and
+> `evidence/followup-probes.json` the later one. Both are correct as of their own run, and both
+> drifting pairs are now recoverable from the files themselves.
+>
+> **Consequence for the test guide:** an expected result must be a *shape* — HTTP 200, a
+> `total_count` present and non-zero, the expected fields on the first record — never a specific
+> number. A reader whose count differs has not failed a test.
+
 | | `KOI_PAET` | `KOI_PLTS` |
 |---|---|---|
-| Inventory items | 3,447 | 5,644 |
+| Inventory items | 3,447 | 5,644 (later 5,646 — see drift note) |
 | Policies | 32 | 28 |
 | Allowlist entries | 0 (empty) | 5 |
 | Blocklist entries | 0 (empty) | 17 |
 | `view=mcp_servers` | 21 | 42 |
-| `view=software` | 406 | 1,044 |
+| `view=software` | 406 | 1,044 (later 1,046 — see drift note) |
 | Alerts available via API | 296 | 48,526 |
 | Audit records available via API | 8,789 | 96,196 |
 
 The two tenants hold **very different** data volumes. Any test guide that quotes an expected row
 count must name the tenant it was measured on.
+
+---
+
+## 7a. Portable additional content — the Script Runner playbooks **[LIVE, re-verified]**
+
+Re-checked first-hand in this session against `../KOI/Playbooks/` (read-only). The three
+`Koi Unified` playbooks contain **no `koi-*` string whatsoever** — not a command, not a reference:
+
+| Playbook | `koi-*` commands | Cortex-native commands |
+|---|---|---|
+| `Koi Unified - Script Runner` | none | — (`PrintErrorEntry`, `SetAndHandleEmpty`, `Builtin\|\|\|closeInvestigation`) |
+| `Koi Unified - Process Config Entry` | none | — (`Print`, `PrintErrorEntry`, `DeleteContext`, `SetAndHandleEmpty`) |
+| `Koi Unified - Execute Endpoint Script` | none | `core-get-scripts`, `core-get-endpoints`, `core-script-run` |
+
+They are therefore **fully portable** to a tenant running the Marketplace pack. They are **not part
+of the Marketplace pack** and must be labelled as additional content wherever they appear.
+
+> **Precision, because this is easy to overstate:** they call no **KOI** command. They are not
+> command-free. Besides the three `core-*` commands, they use the common automations
+> `Print`, `PrintErrorEntry`, `SetAndHandleEmpty`, `DeleteContext`, `GetErrorsFromEntry` and the
+> builtin `closeInvestigation`. Write "the only *KOI* commands they invoke: none", never "the only
+> commands they invoke are the three `core-*` ones".
+
+For contrast, the remaining custom-pack playbooks depend on commands that do not exist here:
+`KOI - Alert Triage` and `KOI - Enrich Item` need `koi-koidex-risk-report`;
+`KOI - Investigate Device` needs `koi-device-inventory-get` and `koi-remediations-list`;
+`KOI - Investigate Item` needs `koi-approval-requests-list`, `koi-koidex-risk-report` and
+`koi-remediations-list`. `KOI - MCP Server Audit` (`koi-inventory-list`) and
+`KOI - Block and Remediate` (`koi-blocklist-items-add`) use only commands that **do** exist —
+but the latter calls `KOI - Investigate Item` as a sub-playbook, which does not work here.
 
 ---
 

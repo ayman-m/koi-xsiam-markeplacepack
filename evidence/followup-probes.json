@@ -1,0 +1,284 @@
+{
+ "purpose": "Follow-up probes closing the gaps the adversarial fact-check identified in the first sweep.",
+ "date": "2026-07-20",
+ "views": [
+  {
+   "instance": "KOI_PAET",
+   "view": "agentic_ai",
+   "status": 200,
+   "total_count": 226
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "ai_models",
+   "status": 200,
+   "total_count": 3
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "all_items",
+   "status": 200,
+   "total_count": 0
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "code_packages",
+   "status": 200,
+   "total_count": 2315
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "extensions",
+   "status": 200,
+   "total_count": 180
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "mcp_servers",
+   "status": 200,
+   "total_count": 21
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "os_packages",
+   "status": 200,
+   "total_count": 350
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "repositories",
+   "status": 200,
+   "total_count": 15
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "software",
+   "status": 200,
+   "total_count": 406
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "browser_extensions",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "ide_extensions",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PAET",
+   "view": "packages",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "agentic_ai",
+   "status": 200,
+   "total_count": 1342
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "ai_models",
+   "status": 200,
+   "total_count": 28
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "all_items",
+   "status": 200,
+   "total_count": 0
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "code_packages",
+   "status": 200,
+   "total_count": 2572
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "extensions",
+   "status": 200,
+   "total_count": 417
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "mcp_servers",
+   "status": 200,
+   "total_count": 42
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "os_packages",
+   "status": 200,
+   "total_count": 393
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "repositories",
+   "status": 200,
+   "total_count": 77
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "software",
+   "status": 200,
+   "total_count": 1046
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "browser_extensions",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "ide_extensions",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "view": "packages",
+   "status": 400,
+   "error": "{\"message\":[\"view must be one of the following values: agentic_ai, ai_models, all_items, code_packages, extensions, mcp_servers, os_packages, repositories, software\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  }
+ ],
+ "search_failure_modes": [
+  {
+   "instance": "KOI_PAET",
+   "case": "filter key omitted from request",
+   "request_body": {
+    "page": 1,
+    "page_size": 2
+   },
+   "status": 500,
+   "total_count": null,
+   "response": "{\"statusCode\":500,\"message\":\"Internal server error\"}"
+  },
+  {
+   "instance": "KOI_PAET",
+   "case": "empty filter object",
+   "request_body": {
+    "page": 1,
+    "page_size": 2,
+    "filter": {}
+   },
+   "status": 400,
+   "total_count": null,
+   "response": "{\"message\":[\"filter.combinator must be one of the following values: and, or\",\"filter.combinator must be a string\",\"filter.rules must be an array\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PAET",
+   "case": "well-formed filter",
+   "request_body": {
+    "page": 1,
+    "page_size": 2,
+    "filter": {
+     "combinator": "and",
+     "rules": [
+      {
+       "field": "risk_level",
+       "operator": "=",
+       "value": "high"
+      }
+     ]
+    }
+   },
+   "status": 200,
+   "total_count": 145,
+   "response": "{\"items\":[{\"item_id\":\"fjnehcbecaggobjholekjijaaekbnlgj\",\"item_display_name\":\"Browsec VPN - Free VPN for Edge\",\"version\":\"3.92.12\",\"marketplace\":\"edge_add_ons\",\"publisher_name\":\"Browsec LLC\",\"platforms\":[\"edge\"],\"endpoint_count\":1,\"risk\":8.149798,\"risk_level\":\"high\",\"installation_method\":\"marketplace\",\"categories\":[\"Productivity\"],\"short_description\":\"Browsec VPN is a Edge VPN extension that protec"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "case": "filter key omitted from request",
+   "request_body": {
+    "page": 1,
+    "page_size": 2
+   },
+   "status": 500,
+   "total_count": null,
+   "response": "{\"statusCode\":500,\"message\":\"Internal server error\"}"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "case": "empty filter object",
+   "request_body": {
+    "page": 1,
+    "page_size": 2,
+    "filter": {}
+   },
+   "status": 400,
+   "total_count": null,
+   "response": "{\"message\":[\"filter.combinator must be one of the following values: and, or\",\"filter.combinator must be a string\",\"filter.rules must be an array\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+  },
+  {
+   "instance": "KOI_PLTS",
+   "case": "well-formed filter",
+   "request_body": {
+    "page": 1,
+    "page_size": 2,
+    "filter": {
+     "combinator": "and",
+     "rules": [
+      {
+       "field": "risk_level",
+       "operator": "=",
+       "value": "high"
+      }
+     ]
+    }
+   },
+   "status": 200,
+   "total_count": 75,
+   "response": "{\"items\":[{\"item_id\":\"@playwright/mcp\",\"item_display_name\":\"@playwright/mcp\",\"version\":\"0.0.78\",\"marketplace\":\"npm\",\"publisher_name\":\"GitHub Actions\",\"platforms\":[\"npm\"],\"endpoint_count\":1,\"risk\":7.94426368,\"risk_level\":\"high\",\"installation_method\":\"marketplace\",\"categories\":[],\"short_description\":\"Playwright Tools for MCP\",\"installs_count\":\"98063561\",\"released_at\":\"2025-03-13T00:36:23.518Z\",\"firs"
+  },
+  {
+   "instance": null,
+   "case": "command run with neither filter_json nor filter_raw_json_entry_id",
+   "status": "no API call made",
+   "response": "Koi.py raises DemistoException(\"Either 'filter_json' or 'filter_raw_json_entry_id' must be provided.\") before any request. Source: Koi.py line 468. NOT executed through XSIAM \u2014 read from code."
+  }
+ ],
+ "auth": [
+  {
+   "case": "invalid bearer token",
+   "status": 401,
+   "response": "{\"message\":\"Unauthorized\",\"statusCode\":401}"
+  },
+  {
+   "case": "403 / blocked egress",
+   "status": null,
+   "response": "NEVER OBSERVED from this machine. Any statement about 403 semantics is unverified."
+  }
+ ],
+ "unfiltered_inventory": [
+  {
+   "instance": "KOI_PAET",
+   "attempt_within_run": 1,
+   "status": 200,
+   "total_count": 3447
+  },
+  {
+   "instance": "KOI_PAET",
+   "attempt_within_run": 2,
+   "status": 200,
+   "total_count": 3447
+  },
+  {
+   "instance": "KOI_PLTS",
+   "attempt_within_run": 1,
+   "status": 200,
+   "total_count": 5646
+  },
+  {
+   "instance": "KOI_PLTS",
+   "attempt_within_run": 2,
+   "status": 200,
+   "total_count": 5646
+  }
+ ]
+}

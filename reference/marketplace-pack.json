@@ -28,6 +28,7 @@
   "fromversion": "6.10.0",
   "dockerimage": "demisto/fastapi:0.125.0.10158186",
   "isfetchevents": true,
+  "isfetchevents_xsoar": false,
   "supportedModules": null
  },
  "configuration": [
