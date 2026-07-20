@@ -1,3 +1,29 @@
+# ---------------------------------------------------------------------------
+# Project-specific. These matter most — this repo has live credentials beside it.
+# ---------------------------------------------------------------------------
+
+# Credentials — never commit. Holds live Cortex XSIAM and KOI API keys.
+.env
+.env.*
+!.env.example
+
+# Node (doc generators need docx / pptxgenjs)
+node_modules/
+package-lock.json
+
+# Generated artefacts ARE committed (docs/*.docx, *.pptx, *.pdf);
+# intermediate render junk is not.
+*.tmp
+.~lock.*#
+.DS_Store
+
+# Raw tenant captures carry real hostnames and installed-software inventory.
+evidence/raw/
+
+# ---------------------------------------------------------------------------
+# Standard GitHub Python template (from the repository's initial commit)
+# ---------------------------------------------------------------------------
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

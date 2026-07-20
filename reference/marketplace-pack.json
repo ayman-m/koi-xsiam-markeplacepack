@@ -1,0 +1,1728 @@
+{
+ "source": {
+  "repo": "demisto/content",
+  "path": "Packs/Koi/Integrations/Koi/Koi.yml",
+  "md5": "5497cdddedeb0c0d7d0b371aa075a64c",
+  "verified_against_master": "2026-07-20"
+ },
+ "pack": {
+  "name": "KOI",
+  "currentVersion": "1.2.3",
+  "support": "xsoar",
+  "author": "Cortex XSOAR",
+  "categories": [
+   "Endpoint"
+  ],
+  "marketplaces": [
+   "xsoar",
+   "marketplacev2",
+   "platform"
+  ],
+  "created": "2026-03-26T00:00:00Z"
+ },
+ "integration": {
+  "id": "KOI",
+  "name": "KOI",
+  "display": "KOI",
+  "category": "Endpoint",
+  "fromversion": "6.10.0",
+  "dockerimage": "demisto/fastapi:0.125.0.10158186",
+  "isfetchevents": true,
+  "supportedModules": null
+ },
+ "configuration": [
+  {
+   "name": "url",
+   "display": "Server URL",
+   "type": 0,
+   "required": true,
+   "defaultvalue": "https://api.prod.koi.security/",
+   "additionalinfo": "The KOI API server URL.",
+   "section": "Connect",
+   "advanced": false,
+   "hidden": null
+  },
+  {
+   "name": "api_key",
+   "display": "API Key",
+   "type": 14,
+   "required": true,
+   "defaultvalue": null,
+   "additionalinfo": "The API key for authenticating with the KOI API. See the help section for instructions on creating an API key.",
+   "section": "Connect",
+   "advanced": false,
+   "hidden": null
+  },
+  {
+   "name": "insecure",
+   "display": "Trust any certificate (not secure)",
+   "type": 8,
+   "required": false,
+   "defaultvalue": null,
+   "additionalinfo": null,
+   "section": "Connect",
+   "advanced": true,
+   "hidden": null
+  },
+  {
+   "name": "proxy",
+   "display": "Use system proxy settings",
+   "type": 8,
+   "required": false,
+   "defaultvalue": null,
+   "additionalinfo": null,
+   "section": "Connect",
+   "advanced": true,
+   "hidden": null
+  },
+  {
+   "name": "isFetchEvents",
+   "display": "Fetch events",
+   "type": 8,
+   "required": false,
+   "defaultvalue": null,
+   "additionalinfo": "",
+   "section": "Collect",
+   "advanced": false,
+   "hidden": [
+    "xsoar"
+   ]
+  },
+  {
+   "name": "event_types_to_fetch",
+   "display": "Fetch event types",
+   "type": 16,
+   "required": true,
+   "defaultvalue": "Alerts,Audit",
+   "additionalinfo": "Select which event types to fetch from KOI.",
+   "section": "Collect",
+   "advanced": false,
+   "hidden": [
+    "xsoar"
+   ]
+  },
+  {
+   "name": "audit_types_filter",
+   "display": "Audit log type filter",
+   "type": 16,
+   "required": false,
+   "defaultvalue": null,
+   "additionalinfo": "Filter audit logs by type(s). If not specified, all audit log types will be fetched.",
+   "section": "Collect",
+   "advanced": false,
+   "hidden": [
+    "xsoar"
+   ]
+  },
+  {
+   "name": "max_fetch",
+   "display": "Maximum number of events per fetch",
+   "type": 0,
+   "required": false,
+   "defaultvalue": "5000",
+   "additionalinfo": "Maximum number of events to fetch per type per fetch cycle (default: 5000).",
+   "section": "Collect",
+   "advanced": false,
+   "hidden": [
+    "xsoar"
+   ]
+  },
+  {
+   "name": "eventFetchInterval",
+   "display": "Events Fetch Interval",
+   "type": 19,
+   "required": false,
+   "defaultvalue": 1,
+   "additionalinfo": "",
+   "section": "Collect",
+   "advanced": true,
+   "hidden": [
+    "xsoar"
+   ]
+  }
+ ],
+ "commands": [
+  {
+   "name": "koi-get-events",
+   "description": "Gets events from KOI. Use this command for development and debugging only, as it may produce duplicate events, exceed API rate limits, or disrupt the fetch mechanism.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "event_type",
+     "required": false,
+     "description": "The type of events to retrieve. If not specified, uses the value configured in the integration parameters.",
+     "defaultValue": "Alerts,Audit",
+     "predefined": [
+      "Alerts",
+      "Audit"
+     ],
+     "isArray": true
+    },
+    {
+     "name": "limit",
+     "required": false,
+     "description": "The maximum number of events to return per type.",
+     "defaultValue": "50",
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "start_time",
+     "required": false,
+     "description": "Filter events created at or after this time. Supports ISO 8601 format or relative time expressions (e.g., \"3 days ago\", \"2024-01-01T00:00:00Z\").",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "end_time",
+     "required": false,
+     "description": "Filter events created at or before this time. Supports ISO 8601 format or relative time expressions (e.g., \"now\", \"2024-01-01T00:00:00Z\").",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "should_push_events",
+     "required": false,
+     "description": "The flag that indicates whether to push events to Cortex XSIAM. Pushing events is supported on Cortex XSIAM only. When set to false, or on non-XSIAM platforms, events are displayed without being pushed.",
+     "defaultValue": "false",
+     "predefined": [
+      "true",
+      "false"
+     ],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "KOI.Event.id",
+     "type": "String",
+     "description": "The unique identifier of the event."
+    },
+    {
+     "contextPath": "KOI.Event.source_log_type",
+     "type": "String",
+     "description": "The source log type of the event (Alerts or Audit)."
+    },
+    {
+     "contextPath": "KOI.Event._time",
+     "type": "Date",
+     "description": "The timestamp of the event in ISO 8601 format."
+    },
+    {
+     "contextPath": "KOI.Event.created_at",
+     "type": "Date",
+     "description": "The creation time of the event (audit logs)."
+    }
+   ]
+  },
+  {
+   "name": "koi-policy-list",
+   "description": "Retrieves a list of all policies. Use 'page' and 'page_size' to fetch a specific page, or use 'limit' to auto-paginate and collect up to the specified number of policies. If 'page' is provided, 'limit' is ignored.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "page",
+     "required": false,
+     "description": "Page number for pagination (1-based). When provided, fetches a single page and ignores the limit argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page_size",
+     "required": false,
+     "description": "Number of results per page (default: 50, max: 500). Used only in single-page mode together with the page argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "limit",
+     "required": false,
+     "description": "Maximum total number of policies to return (default: 50, max: 1000). When provided without page, auto-paginates to collect up to this many policies.",
+     "defaultValue": "50",
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Policy.id",
+     "type": "Number",
+     "description": "The unique identifier of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.name",
+     "type": "String",
+     "description": "The name of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.description",
+     "type": "String",
+     "description": "The description of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.action",
+     "type": "String",
+     "description": "The action taken by the policy (e.g., block)."
+    },
+    {
+     "contextPath": "Koi.Policy.enabled",
+     "type": "Boolean",
+     "description": "Whether the policy is enabled."
+    },
+    {
+     "contextPath": "Koi.Policy.group_ids",
+     "type": "Unknown",
+     "description": "List of group IDs associated with the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.creator_fullname",
+     "type": "String",
+     "description": "The full name of the policy creator."
+    },
+    {
+     "contextPath": "Koi.Policy.created_at",
+     "type": "Date",
+     "description": "The creation time of the policy in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Policy.updated_at",
+     "type": "Date",
+     "description": "The last update time of the policy in ISO 8601 format."
+    }
+   ]
+  },
+  {
+   "name": "koi-allowlist-get",
+   "description": "Retrieves all items in the allowlist.",
+   "execution": false,
+   "arguments": [],
+   "outputs": [
+    {
+     "contextPath": "Koi.Allowlist.item_id",
+     "type": "String",
+     "description": "The unique identifier of the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.item_name",
+     "type": "String",
+     "description": "The name of the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.item_display_name",
+     "type": "String",
+     "description": "The display name of the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.marketplace",
+     "type": "String",
+     "description": "The marketplace of the allowlist item (e.g., vscode)."
+    },
+    {
+     "contextPath": "Koi.Allowlist.publisher_name",
+     "type": "String",
+     "description": "The publisher name of the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.package_name",
+     "type": "String",
+     "description": "The package name of the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.notes",
+     "type": "String",
+     "description": "Notes associated with the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.created_by",
+     "type": "String",
+     "description": "The user who created the allowlist item."
+    },
+    {
+     "contextPath": "Koi.Allowlist.created_at",
+     "type": "Date",
+     "description": "The creation time of the allowlist item in ISO 8601 format."
+    }
+   ]
+  },
+  {
+   "name": "koi-allowlist-items-remove",
+   "description": "Removes one or more items from the global allowlist. Provide either 'item_id' and 'marketplace' for a single item, or 'items_list_raw_json_entry_id' for bulk removal from a JSON file.",
+   "execution": true,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": false,
+     "description": "The ID of the item to remove from the allowlist. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": false,
+     "description": "The source marketplace of the item. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "created_by",
+     "required": false,
+     "description": "Email of the user who created this entry.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "notes",
+     "required": false,
+     "description": "Additional notes about the removal.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "items_list_raw_json_entry_id",
+     "required": false,
+     "description": "War Room entry ID of a JSON file containing a list of items to remove. Each item must have \"item_id\" and \"marketplace\" fields. Optional fields: \"created_by\", \"notes\". When provided, item_id and marketplace arguments are ignored.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": []
+  },
+  {
+   "name": "koi-allowlist-items-add",
+   "description": "Adds one or more items to the global allowlist. Provide either 'item_id' and 'marketplace' for a single item, or 'items_list_raw_json_entry_id' for bulk addition from a JSON file.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": false,
+     "description": "The ID of the item to add to the allowlist. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": false,
+     "description": "The source marketplace of the item. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "created_by",
+     "required": false,
+     "description": "Email of the user who created this entry.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "notes",
+     "required": false,
+     "description": "Additional notes about the entry.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "items_list_raw_json_entry_id",
+     "required": false,
+     "description": "War Room entry ID of a JSON file containing a list of items to add. Each item must have \"item_id\" and \"marketplace\" fields. Optional fields: \"created_by\", \"notes\". When provided, item_id and marketplace arguments are ignored.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": []
+  },
+  {
+   "name": "koi-blocklist-get",
+   "description": "Retrieves all items in the blocklist.",
+   "execution": false,
+   "arguments": [],
+   "outputs": [
+    {
+     "contextPath": "Koi.Blocklist.item_id",
+     "type": "String",
+     "description": "The unique identifier of the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.item_name",
+     "type": "String",
+     "description": "The name of the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.item_display_name",
+     "type": "String",
+     "description": "The display name of the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.marketplace",
+     "type": "String",
+     "description": "The marketplace of the blocklist item (e.g., vscode)."
+    },
+    {
+     "contextPath": "Koi.Blocklist.publisher_name",
+     "type": "String",
+     "description": "The publisher name of the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.package_name",
+     "type": "String",
+     "description": "The package name of the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.notes",
+     "type": "String",
+     "description": "Notes associated with the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.created_by",
+     "type": "String",
+     "description": "The user who created the blocklist item."
+    },
+    {
+     "contextPath": "Koi.Blocklist.created_at",
+     "type": "Date",
+     "description": "The creation time of the blocklist item in ISO 8601 format."
+    }
+   ]
+  },
+  {
+   "name": "koi-blocklist-items-remove",
+   "description": "Removes one or more items from the global blocklist. Provide either 'item_id' and 'marketplace' for a single item, or 'items_list_raw_json_entry_id' for bulk removal from a JSON file.",
+   "execution": true,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": false,
+     "description": "The ID of the item to remove from the blocklist. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": false,
+     "description": "The source marketplace of the item. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "created_by",
+     "required": false,
+     "description": "Email of the user who created this entry.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "notes",
+     "required": false,
+     "description": "Additional notes about the removal.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "items_list_raw_json_entry_id",
+     "required": false,
+     "description": "War Room entry ID of a JSON file containing a list of items to remove. Each item must have \"item_id\" and \"marketplace\" fields. Optional fields: \"created_by\", \"notes\". When provided, item_id and marketplace arguments are ignored.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": []
+  },
+  {
+   "name": "koi-blocklist-items-add",
+   "description": "Adds one or more items to the global blocklist. Provide either 'item_id' and 'marketplace' for a single item, or 'items_list_raw_json_entry_id' for bulk addition from a JSON file.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": false,
+     "description": "The ID of the item to add to the blocklist. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": false,
+     "description": "The source marketplace of the item. Required when not using items_list_raw_json_entry_id.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "created_by",
+     "required": false,
+     "description": "Email of the user who created this entry.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "notes",
+     "required": false,
+     "description": "Additional notes or justification for blocking the item.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "items_list_raw_json_entry_id",
+     "required": false,
+     "description": "War Room entry ID of a JSON file containing a list of items to add. Each item must have \"item_id\" and \"marketplace\" fields. Optional fields: \"created_by\", \"notes\". When provided, item_id and marketplace arguments are ignored.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": []
+  },
+  {
+   "name": "koi-policy-status-update",
+   "description": "Enables or disables a policy by ID.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "policy_id",
+     "required": true,
+     "description": "The ID of the policy to update.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "enabled",
+     "required": true,
+     "description": "Whether to enable (true) or disable (false) the policy.",
+     "defaultValue": null,
+     "predefined": [
+      "true",
+      "false"
+     ],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Policy.id",
+     "type": "Number",
+     "description": "The unique identifier of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.name",
+     "type": "String",
+     "description": "The name of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.description",
+     "type": "String",
+     "description": "The description of the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.action",
+     "type": "String",
+     "description": "The action taken by the policy (e.g., block)."
+    },
+    {
+     "contextPath": "Koi.Policy.enabled",
+     "type": "Boolean",
+     "description": "Whether the policy is enabled."
+    },
+    {
+     "contextPath": "Koi.Policy.group_ids",
+     "type": "Unknown",
+     "description": "List of group IDs associated with the policy."
+    },
+    {
+     "contextPath": "Koi.Policy.creator_fullname",
+     "type": "String",
+     "description": "The full name of the policy creator."
+    },
+    {
+     "contextPath": "Koi.Policy.created_at",
+     "type": "Date",
+     "description": "The creation time of the policy in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Policy.updated_at",
+     "type": "Date",
+     "description": "The last update time of the policy in ISO 8601 format."
+    }
+   ]
+  },
+  {
+   "name": "koi-inventory-list",
+   "description": "Retrieves a paginated list of items installed across your organization's endpoints. Supports extensive filtering by marketplace, platform, risk level, publisher, and specific categories.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "page",
+     "required": false,
+     "description": "Page number for pagination (1-based). When provided, fetches a single page and ignores the limit argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page_size",
+     "required": false,
+     "description": "Number of results per page (default: 50, max: 500). Used in single-page mode with the page argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "limit",
+     "required": false,
+     "description": "Maximum total number of inventory items to return (default: 50, max: 1000). When provided without page, auto-paginates to collect up to this many items.",
+     "defaultValue": "50",
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "brew_category_koi",
+     "required": false,
+     "description": "Filter by Homebrew package category (Koi classification).",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "browser_category_koi",
+     "required": false,
+     "description": "Filter by browser extension category (Koi classification).",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "chocolatey_category_koi",
+     "required": false,
+     "description": "Filter by Chocolatey package category (Koi classification).",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "device_id",
+     "required": false,
+     "description": "Filter devices by device ID.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "finding_id",
+     "required": false,
+     "description": "Filter devices by finding ID.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "first_seen",
+     "required": false,
+     "description": "Filter by first seen date (items first seen on or after this date). ISO 8601 format (e.g., \"2024-01-01T00:00:00Z\").",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "ide_category_koi",
+     "required": false,
+     "description": "Filter by IDE extension category (Koi classification).",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "installation_method",
+     "required": false,
+     "description": "Filter by installation method.",
+     "defaultValue": null,
+     "predefined": [
+      "marketplace",
+      "manual",
+      "built_in",
+      "side_loaded"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "item_display_name",
+     "required": false,
+     "description": "Filter by item display name. Performs case-insensitive partial match.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "item_id",
+     "required": false,
+     "description": "Filter by item ID.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": false,
+     "description": "Filter by marketplace.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "platform",
+     "required": false,
+     "description": "Filter by platform.",
+     "defaultValue": null,
+     "predefined": [
+      "antigravity",
+      "aqua",
+      "arc",
+      "brave",
+      "brew",
+      "chatgpt_atlas",
+      "chocolatey",
+      "chrome",
+      "chromium",
+      "claude",
+      "clion",
+      "codex",
+      "comet",
+      "cursor",
+      "datagrip",
+      "dataspell",
+      "dia",
+      "edge",
+      "excel",
+      "firefox",
+      "fleet",
+      "goland",
+      "hugging_face",
+      "intellij_community",
+      "intellij",
+      "kiro",
+      "mac",
+      "npm",
+      "notepad++",
+      "opera",
+      "outlook",
+      "phpstorm",
+      "powerpoint",
+      "prisma_access_browser",
+      "pycharm",
+      "pypi",
+      "rider",
+      "rubymine",
+      "rustrover",
+      "vscode",
+      "webstorm",
+      "windsurf",
+      "word",
+      "windows",
+      "writerside"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "publisher_name",
+     "required": false,
+     "description": "Filter by publisher name. Performs case-insensitive partial match.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "risk_level",
+     "required": false,
+     "description": "Filter by risk level.",
+     "defaultValue": null,
+     "predefined": [
+      "low",
+      "medium",
+      "high",
+      "critical",
+      "pending"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "software_category_koi",
+     "required": false,
+     "description": "Filter by software category (Koi classification).",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "sort_by",
+     "required": false,
+     "description": "Column to sort by.",
+     "defaultValue": "first_seen",
+     "predefined": [
+      "first_seen",
+      "last_seen",
+      "item_display_name",
+      "item_id",
+      "version",
+      "marketplace",
+      "endpoint_count",
+      "risk",
+      "risk_level",
+      "status",
+      "installs_count",
+      "released_at",
+      "publisher_name"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "sort_direction",
+     "required": false,
+     "description": "Sort direction.",
+     "defaultValue": null,
+     "predefined": [
+      "asc",
+      "desc"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "view",
+     "required": false,
+     "description": "Filter by predefined view (marketplace group).",
+     "defaultValue": null,
+     "predefined": [
+      "agentic_ai",
+      "ai_models",
+      "code_packages",
+      "extensions",
+      "os_packages",
+      "software"
+     ],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Inventory.item_id",
+     "type": "String",
+     "description": "The unique identifier of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.item_display_name",
+     "type": "String",
+     "description": "The display name of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.marketplace",
+     "type": "String",
+     "description": "The marketplace source of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.platforms",
+     "type": "Unknown",
+     "description": "List of platforms where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.publisher_name",
+     "type": "String",
+     "description": "The publisher name of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk",
+     "type": "Number",
+     "description": "The numeric risk score of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk_level",
+     "type": "String",
+     "description": "The risk level classification of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.version",
+     "type": "String",
+     "description": "The version of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.status",
+     "type": "String",
+     "description": "The governance status of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.endpoint_count",
+     "type": "Number",
+     "description": "The number of endpoints where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.installs_count",
+     "type": "Number",
+     "description": "The total number of installs for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.first_seen",
+     "type": "Date",
+     "description": "The date the item was first seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_seen",
+     "type": "Date",
+     "description": "The date the item was last seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_used",
+     "type": "Date",
+     "description": "The date the item was last used in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.installation_method",
+     "type": "String",
+     "description": "The method used to install the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.short_description",
+     "type": "String",
+     "description": "A short description of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_first_party",
+     "type": "Boolean",
+     "description": "Whether the item is a first-party item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_signed",
+     "type": "Boolean",
+     "description": "Whether the item is signed."
+    },
+    {
+     "contextPath": "Koi.Inventory.categories",
+     "type": "Unknown",
+     "description": "List of categories the item belongs to."
+    },
+    {
+     "contextPath": "Koi.Inventory.findings",
+     "type": "Unknown",
+     "description": "List of findings associated with the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.governed_details",
+     "type": "Unknown",
+     "description": "Governance policy details for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.released_at",
+     "type": "Date",
+     "description": "The release date of the item. Format: YYYY-MM-DD (e.g., 2023-01-15)."
+    },
+    {
+     "contextPath": "Koi.Inventory.brew_category_koi",
+     "type": "String",
+     "description": "The Homebrew package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.browser_category_koi",
+     "type": "String",
+     "description": "The browser extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.chocolatey_category_koi",
+     "type": "String",
+     "description": "The Chocolatey package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.ide_category_koi",
+     "type": "String",
+     "description": "The IDE extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.software_category_koi",
+     "type": "String",
+     "description": "The software category (Koi classification)."
+    }
+   ]
+  },
+  {
+   "name": "koi-inventory-item-get",
+   "description": "Retrieves comprehensive details for a specific software item, extension, or package using its unique identifier, marketplace, and version.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": true,
+     "description": "Unique identifier for the item.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": true,
+     "description": "The marketplace where the item is hosted.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "version",
+     "required": true,
+     "description": "The specific version of the item to retrieve.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Inventory.item_id",
+     "type": "String",
+     "description": "The unique identifier of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.item_display_name",
+     "type": "String",
+     "description": "The display name of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.marketplace",
+     "type": "String",
+     "description": "The marketplace source of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.platforms",
+     "type": "Unknown",
+     "description": "List of platforms where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.publisher_name",
+     "type": "String",
+     "description": "The publisher name of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk",
+     "type": "Number",
+     "description": "The numeric risk score of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk_level",
+     "type": "String",
+     "description": "The risk level classification of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.version",
+     "type": "String",
+     "description": "The version of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.status",
+     "type": "String",
+     "description": "The governance status of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.endpoint_count",
+     "type": "Number",
+     "description": "The number of endpoints where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.installs_count",
+     "type": "Number",
+     "description": "The total number of installs for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.installation_method",
+     "type": "String",
+     "description": "The method used to install the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_first_party",
+     "type": "Boolean",
+     "description": "Whether the item is a first-party item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_signed",
+     "type": "Boolean",
+     "description": "Whether the item is signed."
+    },
+    {
+     "contextPath": "Koi.Inventory.first_seen",
+     "type": "Date",
+     "description": "The date the item was first seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_seen",
+     "type": "Date",
+     "description": "The date the item was last seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_used",
+     "type": "Date",
+     "description": "The date the item was last used in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.released_at",
+     "type": "Date",
+     "description": "The release date of the item. Format: YYYY-MM-DD (e.g., 2023-01-15)."
+    },
+    {
+     "contextPath": "Koi.Inventory.short_description",
+     "type": "String",
+     "description": "A short description of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.categories",
+     "type": "Unknown",
+     "description": "List of categories the item belongs to."
+    },
+    {
+     "contextPath": "Koi.Inventory.findings",
+     "type": "Unknown",
+     "description": "List of findings associated with the item including severity and evidence."
+    },
+    {
+     "contextPath": "Koi.Inventory.governed_details",
+     "type": "Unknown",
+     "description": "Governance policy details for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.brew_category_koi",
+     "type": "String",
+     "description": "The Homebrew package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.browser_category_koi",
+     "type": "String",
+     "description": "The browser extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.chocolatey_category_koi",
+     "type": "String",
+     "description": "The Chocolatey package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.ide_category_koi",
+     "type": "String",
+     "description": "The IDE extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.software_category_koi",
+     "type": "String",
+     "description": "The software category (Koi classification)."
+    }
+   ]
+  },
+  {
+   "name": "koi-inventory-search",
+   "description": "Searches inventory items using advanced query builder filters. Provide a filter via 'filter_json' (inline JSON string) or 'filter_raw_json_entry_id' (War Room file entry ID). At least one filter source must be provided.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "filter_json",
+     "required": false,
+     "description": "Advanced filter using query builder syntax as a JSON string. Either filter_json or filter_raw_json_entry_id must be provided.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "filter_raw_json_entry_id",
+     "required": false,
+     "description": "War Room entry ID of a JSON file containing the filter object. Takes priority over filter_json when both are provided.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page",
+     "required": false,
+     "description": "Page number for pagination (1-based). When provided, fetches a single page and ignores the limit argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page_size",
+     "required": false,
+     "description": "Number of results per page (default: 50, max: 500). Used in single-page mode with the page argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "limit",
+     "required": false,
+     "description": "Maximum total number of inventory items to return (default: 50, max: 1000). When provided without page, auto-paginates to collect up to this many items.",
+     "defaultValue": "50",
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "sort_by",
+     "required": false,
+     "description": "Column to sort by.",
+     "defaultValue": "first_seen",
+     "predefined": [
+      "first_seen",
+      "last_seen",
+      "item_display_name",
+      "item_id",
+      "version",
+      "marketplace",
+      "endpoint_count",
+      "risk",
+      "risk_level",
+      "status",
+      "installs_count",
+      "released_at",
+      "publisher_name"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "sort_direction",
+     "required": false,
+     "description": "Sort direction.",
+     "defaultValue": "desc",
+     "predefined": [
+      "asc",
+      "desc"
+     ],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Inventory.item_id",
+     "type": "String",
+     "description": "The unique identifier of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.item_display_name",
+     "type": "String",
+     "description": "The display name of the inventory item."
+    },
+    {
+     "contextPath": "Koi.Inventory.marketplace",
+     "type": "String",
+     "description": "The marketplace source of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.platforms",
+     "type": "Unknown",
+     "description": "List of platforms where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.publisher_name",
+     "type": "String",
+     "description": "The publisher name of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk",
+     "type": "Number",
+     "description": "The numeric risk score of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.risk_level",
+     "type": "String",
+     "description": "The risk level classification of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.version",
+     "type": "String",
+     "description": "The version of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.status",
+     "type": "String",
+     "description": "The governance status of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.endpoint_count",
+     "type": "Number",
+     "description": "The number of endpoints where the item is installed."
+    },
+    {
+     "contextPath": "Koi.Inventory.installs_count",
+     "type": "Number",
+     "description": "The total number of installs for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.first_seen",
+     "type": "Date",
+     "description": "The date the item was first seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_seen",
+     "type": "Date",
+     "description": "The date the item was last seen in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.last_used",
+     "type": "Date",
+     "description": "The date the item was last used in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.installation_method",
+     "type": "String",
+     "description": "The method used to install the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.short_description",
+     "type": "String",
+     "description": "A short description of the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_first_party",
+     "type": "Boolean",
+     "description": "Whether the item is a first-party item."
+    },
+    {
+     "contextPath": "Koi.Inventory.is_signed",
+     "type": "Boolean",
+     "description": "Whether the item is signed."
+    },
+    {
+     "contextPath": "Koi.Inventory.categories",
+     "type": "Unknown",
+     "description": "List of categories the item belongs to."
+    },
+    {
+     "contextPath": "Koi.Inventory.findings",
+     "type": "Unknown",
+     "description": "List of findings associated with the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.governed_details",
+     "type": "Unknown",
+     "description": "Governance policy details for the item."
+    },
+    {
+     "contextPath": "Koi.Inventory.released_at",
+     "type": "Date",
+     "description": "The release date of the item. Format: YYYY-MM-DD (e.g., 2023-01-15)."
+    },
+    {
+     "contextPath": "Koi.Inventory.brew_category_koi",
+     "type": "String",
+     "description": "The Homebrew package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.browser_category_koi",
+     "type": "String",
+     "description": "The browser extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.chocolatey_category_koi",
+     "type": "String",
+     "description": "The Chocolatey package category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.ide_category_koi",
+     "type": "String",
+     "description": "The IDE extension category (Koi classification)."
+    },
+    {
+     "contextPath": "Koi.Inventory.software_category_koi",
+     "type": "String",
+     "description": "The software category (Koi classification)."
+    }
+   ]
+  },
+  {
+   "name": "koi-inventory-item-endpoints-list",
+   "description": "Retrieves a paginated list of endpoints that have a specific item installed.",
+   "execution": false,
+   "arguments": [
+    {
+     "name": "item_id",
+     "required": true,
+     "description": "Unique identifier for the item.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "marketplace",
+     "required": true,
+     "description": "The marketplace where the item is hosted.",
+     "defaultValue": null,
+     "predefined": [
+      "chocolatey",
+      "chrome_web_store",
+      "claude_desktop_extensions",
+      "cursor",
+      "docker",
+      "edge_add_ons",
+      "firefox_add_ons",
+      "github_mcp_registry",
+      "homebrew",
+      "hugging_face",
+      "jetbrains",
+      "linux",
+      "mac",
+      "notepad++",
+      "npm",
+      "office_add_ins",
+      "open_vsx_registry",
+      "pypi",
+      "visual_studio",
+      "vscode",
+      "windows",
+      "windsurf"
+     ],
+     "isArray": false
+    },
+    {
+     "name": "version",
+     "required": true,
+     "description": "The specific version of the item.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page",
+     "required": false,
+     "description": "Page number for pagination (1-based). When provided, fetches a single page and ignores the limit argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "page_size",
+     "required": false,
+     "description": "Number of results per page (default: 50, max: 500). Used in single-page mode with the page argument.",
+     "defaultValue": null,
+     "predefined": [],
+     "isArray": false
+    },
+    {
+     "name": "limit",
+     "required": false,
+     "description": "Maximum total number of endpoints to return (default: 50, max: 1000). When provided without page, auto-paginates to collect up to this many endpoints.",
+     "defaultValue": "50",
+     "predefined": [],
+     "isArray": false
+    }
+   ],
+   "outputs": [
+    {
+     "contextPath": "Koi.Inventory.Endpoint.id",
+     "type": "String",
+     "description": "The unique identifier of the endpoint device."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.hostname",
+     "type": "String",
+     "description": "The hostname of the endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.os",
+     "type": "String",
+     "description": "The operating system of the endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.platform",
+     "type": "String",
+     "description": "The platform where the item is installed on this endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.serial",
+     "type": "String",
+     "description": "The serial number of the endpoint device."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.last_logged_on_user",
+     "type": "String",
+     "description": "The last logged on user of the endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.activation_status",
+     "type": "String",
+     "description": "The activation status of the endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.path",
+     "type": "String",
+     "description": "The installation path of the item on the endpoint."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.first_seen",
+     "type": "Date",
+     "description": "The date the item was first seen on this endpoint in ISO 8601 format."
+    },
+    {
+     "contextPath": "Koi.Inventory.Endpoint.last_seen",
+     "type": "Date",
+     "description": "The date the item was last seen on this endpoint in ISO 8601 format."
+    }
+   ]
+  }
+ ],
+ "contextPrefixes": [
+  "KOI.Event",
+  "Koi.Allowlist",
+  "Koi.Blocklist",
+  "Koi.Inventory",
+  "Koi.Policy"
+ ],
+ "counts": {
+  "commands": 13,
+  "outputs": 131,
+  "arguments": 67
+ }
+}

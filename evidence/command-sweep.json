@@ -1,0 +1,861 @@
+[
+ {
+  "command": "koi-policy-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/policies",
+  "params": {
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "policies": [
+    "dict(9 keys)",
+    "...x32"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "policies",
+   "total_count"
+  ],
+  "total_count": 32,
+  "collection_key": "policies",
+  "returned": 32,
+  "record_fields": [
+   "action",
+   "created_at",
+   "creator_fullname",
+   "description",
+   "enabled",
+   "group_ids",
+   "id",
+   "name",
+   "updated_at"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-policy-list.json"
+ },
+ {
+  "command": "koi-policy-status-update",
+  "instance": "KOI_PAET",
+  "http": "PUT /api/external/v2/policies/{id}",
+  "status": "NOT RUN",
+  "note": "Mutating (PUT enabled=true|false). Deliberately not executed against a live tenant."
+ },
+ {
+  "command": "koi-allowlist-get",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/policies/allowlist",
+  "params": null,
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": "list(empty)"
+  },
+  "top_level_keys": [
+   "items"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-allowlist-get.json"
+ },
+ {
+  "command": "koi-blocklist-get",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/policies/blocklist",
+  "params": null,
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": "list(empty)"
+  },
+  "top_level_keys": [
+   "items"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-blocklist-get.json"
+ },
+ {
+  "command": "koi-allowlist-items-add",
+  "instance": "KOI_PAET",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-allowlist-items-remove",
+  "instance": "KOI_PAET",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-blocklist-items-add",
+  "instance": "KOI_PAET",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-blocklist-items-remove",
+  "instance": "KOI_PAET",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(22 keys)",
+    "...x50"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "items",
+   "total_count"
+  ],
+  "total_count": 3447,
+  "collection_key": "items",
+  "returned": 50,
+  "record_fields": [
+   "categories",
+   "endpoint_count",
+   "findings",
+   "first_seen",
+   "governed_details",
+   "installation_method",
+   "installs_count",
+   "is_first_party",
+   "is_signed",
+   "item_display_name",
+   "item_id",
+   "last_seen",
+   "last_used",
+   "marketplace",
+   "platforms",
+   "publisher_name",
+   "risk",
+   "risk_level",
+   "short_description",
+   "software_category_koi",
+   "status",
+   "version"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-inventory-list.json"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "browser_extensions"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=browser_extensions probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "ide_extensions"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=ide_extensions probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "mcp_servers"
+  },
+  "status": 200,
+  "total_count": 21,
+  "note": "view=mcp_servers probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "software"
+  },
+  "status": 200,
+  "total_count": 406,
+  "note": "view=software probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "packages"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=packages probe"
+ },
+ {
+  "command": "koi-inventory-search",
+  "instance": "KOI_PAET",
+  "http": "POST /api/external/v2/inventory/search",
+  "params": {
+   "page": 1,
+   "page_size": 5,
+   "filter": {}
+  },
+  "status": 400,
+  "note": "",
+  "error_body": "{\"message\":[\"filter.combinator must be one of the following values: and, or\",\"filter.combinator must be a string\",\"filter.rules must be an array\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+ },
+ {
+  "command": "koi-inventory-item-get",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory/{item_id}",
+  "params": {
+   "marketplace": "mac",
+   "version": "150.0.7871.116"
+  },
+  "status": 200,
+  "note": "item triple taken from the first inventory record",
+  "response_shape": {
+   "item_id": "str",
+   "version": "str",
+   "marketplace": "str",
+   "item_display_name": "str",
+   "platforms": [
+    "str",
+    "...x1"
+   ],
+   "risk_level": "str",
+   "installation_method": "str",
+   "publisher_name": "str",
+   "endpoint_count": "int",
+   "risk": "NoneType",
+   "categories": "list(empty)",
+   "short_description": "NoneType",
+   "installs_count": "NoneType",
+   "first_seen": "str",
+   "last_seen": "str",
+   "findings": "list(empty)",
+   "is_first_party": "bool",
+   "software_category_koi": "str",
+   "is_signed": "bool",
+   "last_used": "str",
+   "governed_details": {},
+   "status": "NoneType"
+  },
+  "top_level_keys": [
+   "categories",
+   "endpoint_count",
+   "findings",
+   "first_seen",
+   "governed_details",
+   "installation_method",
+   "installs_count",
+   "is_first_party",
+   "is_signed",
+   "item_display_name",
+   "item_id",
+   "last_seen",
+   "last_used",
+   "marketplace",
+   "platforms",
+   "publisher_name",
+   "risk",
+   "risk_level",
+   "short_description",
+   "software_category_koi",
+   "status",
+   "version"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-inventory-item-get.json"
+ },
+ {
+  "command": "koi-inventory-item-endpoints-list",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/inventory/{item_id}/endpoints",
+  "params": {
+   "marketplace": "mac",
+   "version": "150.0.7871.116",
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "endpoints": [
+    "dict(10 keys)",
+    "...x1"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "endpoints",
+   "total_count"
+  ],
+  "total_count": 1,
+  "collection_key": "endpoints",
+  "returned": 1,
+  "record_fields": [
+   "activation_status",
+   "first_seen",
+   "hostname",
+   "id",
+   "last_logged_on_user",
+   "last_seen",
+   "os",
+   "path",
+   "platform",
+   "serial"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-inventory-item-endpoints-list.json"
+ },
+ {
+  "command": "koi-get-events (Alerts)",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/alerts",
+  "params": {
+   "page": 1,
+   "page_size": 10
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "alerts": [
+    "dict(24 keys)",
+    "...x10"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "alerts",
+   "total_count"
+  ],
+  "total_count": 296,
+  "collection_key": "alerts",
+  "returned": 10,
+  "record_fields": [
+   "activity_id",
+   "activity_name",
+   "category_name",
+   "category_uid",
+   "class_name",
+   "class_uid",
+   "confidence",
+   "confidence_id",
+   "finding_info",
+   "is_alert",
+   "message",
+   "metadata",
+   "observables",
+   "resources",
+   "risk_level",
+   "risk_level_id",
+   "risk_score",
+   "severity",
+   "severity_id",
+   "status",
+   "status_id",
+   "time",
+   "timezone_offset",
+   "type_uid"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-get-events (Alerts).json"
+ },
+ {
+  "command": "koi-get-events (Audit)",
+  "instance": "KOI_PAET",
+  "http": "GET /api/external/v2/audit-logs",
+  "params": {
+   "page": 1,
+   "page_size": 10
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(15 keys)",
+    "...x10"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "items",
+   "total_count"
+  ],
+  "total_count": 8789,
+  "collection_key": "items",
+  "returned": 10,
+  "record_fields": [
+   "action",
+   "category",
+   "created_at",
+   "endpoint",
+   "hostname",
+   "id",
+   "item_version",
+   "marketplace",
+   "message",
+   "object_id",
+   "object_name",
+   "object_type",
+   "platform",
+   "triggered_by",
+   "type"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PAET__koi-get-events (Audit).json"
+ },
+ {
+  "command": "koi-policy-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/policies",
+  "params": {
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "policies": [
+    "dict(9 keys)",
+    "...x28"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "policies",
+   "total_count"
+  ],
+  "total_count": 28,
+  "collection_key": "policies",
+  "returned": 28,
+  "record_fields": [
+   "action",
+   "created_at",
+   "creator_fullname",
+   "description",
+   "enabled",
+   "group_ids",
+   "id",
+   "name",
+   "updated_at"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-policy-list.json"
+ },
+ {
+  "command": "koi-policy-status-update",
+  "instance": "KOI_PLTS",
+  "http": "PUT /api/external/v2/policies/{id}",
+  "status": "NOT RUN",
+  "note": "Mutating (PUT enabled=true|false). Deliberately not executed against a live tenant."
+ },
+ {
+  "command": "koi-allowlist-get",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/policies/allowlist",
+  "params": null,
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(9 keys)",
+    "...x5"
+   ]
+  },
+  "top_level_keys": [
+   "items"
+  ],
+  "collection_key": "items",
+  "returned": 5,
+  "record_fields": [
+   "created_at",
+   "created_by",
+   "item_display_name",
+   "item_id",
+   "item_name",
+   "marketplace",
+   "notes",
+   "package_name",
+   "publisher_name"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-allowlist-get.json"
+ },
+ {
+  "command": "koi-blocklist-get",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/policies/blocklist",
+  "params": null,
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(9 keys)",
+    "...x17"
+   ]
+  },
+  "top_level_keys": [
+   "items"
+  ],
+  "collection_key": "items",
+  "returned": 17,
+  "record_fields": [
+   "created_at",
+   "created_by",
+   "item_display_name",
+   "item_id",
+   "item_name",
+   "marketplace",
+   "notes",
+   "package_name",
+   "publisher_name"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-blocklist-get.json"
+ },
+ {
+  "command": "koi-allowlist-items-add",
+  "instance": "KOI_PLTS",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-allowlist-items-remove",
+  "instance": "KOI_PLTS",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-blocklist-items-add",
+  "instance": "KOI_PLTS",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-blocklist-items-remove",
+  "instance": "KOI_PLTS",
+  "status": "NOT RUN",
+  "note": "Mutating governance write. Deliberately not executed."
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(22 keys)",
+    "...x50"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "items",
+   "total_count"
+  ],
+  "total_count": 5644,
+  "collection_key": "items",
+  "returned": 50,
+  "record_fields": [
+   "categories",
+   "endpoint_count",
+   "findings",
+   "first_seen",
+   "governed_details",
+   "installation_method",
+   "installs_count",
+   "is_first_party",
+   "is_signed",
+   "item_display_name",
+   "item_id",
+   "last_seen",
+   "last_used",
+   "marketplace",
+   "platforms",
+   "publisher_name",
+   "risk",
+   "risk_level",
+   "short_description",
+   "software_category_koi",
+   "status",
+   "version"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-inventory-list.json"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "browser_extensions"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=browser_extensions probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "ide_extensions"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=ide_extensions probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "mcp_servers"
+  },
+  "status": 200,
+  "total_count": 42,
+  "note": "view=mcp_servers probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "software"
+  },
+  "status": 200,
+  "total_count": 1044,
+  "note": "view=software probe"
+ },
+ {
+  "command": "koi-inventory-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory",
+  "params": {
+   "view": "packages"
+  },
+  "status": 400,
+  "total_count": null,
+  "note": "view=packages probe"
+ },
+ {
+  "command": "koi-inventory-search",
+  "instance": "KOI_PLTS",
+  "http": "POST /api/external/v2/inventory/search",
+  "params": {
+   "page": 1,
+   "page_size": 5,
+   "filter": {}
+  },
+  "status": 400,
+  "note": "",
+  "error_body": "{\"message\":[\"filter.combinator must be one of the following values: and, or\",\"filter.combinator must be a string\",\"filter.rules must be an array\"],\"error\":\"Bad Request\",\"statusCode\":400}"
+ },
+ {
+  "command": "koi-inventory-item-get",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory/{item_id}",
+  "params": {
+   "marketplace": "mac",
+   "version": "1.22209.3"
+  },
+  "status": 200,
+  "note": "item triple taken from the first inventory record",
+  "response_shape": {
+   "item_id": "str",
+   "version": "str",
+   "marketplace": "str",
+   "item_display_name": "str",
+   "platforms": [
+    "str",
+    "...x1"
+   ],
+   "risk_level": "str",
+   "installation_method": "str",
+   "publisher_name": "str",
+   "endpoint_count": "int",
+   "risk": "NoneType",
+   "categories": "list(empty)",
+   "short_description": "NoneType",
+   "installs_count": "NoneType",
+   "first_seen": "str",
+   "last_seen": "str",
+   "findings": "list(empty)",
+   "is_first_party": "bool",
+   "software_category_koi": "str",
+   "is_signed": "bool",
+   "last_used": "str",
+   "governed_details": {},
+   "status": "NoneType"
+  },
+  "top_level_keys": [
+   "categories",
+   "endpoint_count",
+   "findings",
+   "first_seen",
+   "governed_details",
+   "installation_method",
+   "installs_count",
+   "is_first_party",
+   "is_signed",
+   "item_display_name",
+   "item_id",
+   "last_seen",
+   "last_used",
+   "marketplace",
+   "platforms",
+   "publisher_name",
+   "risk",
+   "risk_level",
+   "short_description",
+   "software_category_koi",
+   "status",
+   "version"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-inventory-item-get.json"
+ },
+ {
+  "command": "koi-inventory-item-endpoints-list",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/inventory/{item_id}/endpoints",
+  "params": {
+   "marketplace": "mac",
+   "version": "1.22209.3",
+   "page": 1,
+   "page_size": 50
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "endpoints": [
+    "dict(10 keys)",
+    "...x1"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "endpoints",
+   "total_count"
+  ],
+  "total_count": 1,
+  "collection_key": "endpoints",
+  "returned": 1,
+  "record_fields": [
+   "activation_status",
+   "first_seen",
+   "hostname",
+   "id",
+   "last_logged_on_user",
+   "last_seen",
+   "os",
+   "path",
+   "platform",
+   "serial"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-inventory-item-endpoints-list.json"
+ },
+ {
+  "command": "koi-get-events (Alerts)",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/alerts",
+  "params": {
+   "page": 1,
+   "page_size": 10
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "alerts": [
+    "dict(23 keys)",
+    "...x10"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "alerts",
+   "total_count"
+  ],
+  "total_count": 48526,
+  "collection_key": "alerts",
+  "returned": 10,
+  "record_fields": [
+   "activity_id",
+   "activity_name",
+   "category_name",
+   "category_uid",
+   "class_name",
+   "class_uid",
+   "confidence",
+   "confidence_id",
+   "finding_info",
+   "is_alert",
+   "message",
+   "metadata",
+   "observables",
+   "resources",
+   "risk_level",
+   "risk_level_id",
+   "severity",
+   "severity_id",
+   "status",
+   "status_id",
+   "time",
+   "timezone_offset",
+   "type_uid"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-get-events (Alerts).json"
+ },
+ {
+  "command": "koi-get-events (Audit)",
+  "instance": "KOI_PLTS",
+  "http": "GET /api/external/v2/audit-logs",
+  "params": {
+   "page": 1,
+   "page_size": 10
+  },
+  "status": 200,
+  "note": "",
+  "response_shape": {
+   "items": [
+    "dict(15 keys)",
+    "...x10"
+   ],
+   "total_count": "int"
+  },
+  "top_level_keys": [
+   "items",
+   "total_count"
+  ],
+  "total_count": 96196,
+  "collection_key": "items",
+  "returned": 10,
+  "record_fields": [
+   "action",
+   "category",
+   "created_at",
+   "endpoint",
+   "hostname",
+   "id",
+   "item_version",
+   "marketplace",
+   "message",
+   "object_id",
+   "object_name",
+   "object_type",
+   "platform",
+   "triggered_by",
+   "type"
+  ],
+  "raw_evidence": "evidence/raw/KOI_PLTS__koi-get-events (Audit).json"
+ }
+]
