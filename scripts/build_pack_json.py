@@ -93,6 +93,10 @@ def main():
             "fromversion": y.get("fromversion"),
             "dockerimage": script.get("dockerimage"),
             "isfetchevents": script.get("isfetchevents", False),
+            # Overridden to false for XSOAR on the very next YAML line — event
+            # collection is XSIAM/platform only. Generators must not state
+            # "ships an event collector" without this qualifier.
+            "isfetchevents_xsoar": script.get("isfetchevents:xsoar"),
             "supportedModules": y.get("supportedModules"),
         },
         "configuration": params,
