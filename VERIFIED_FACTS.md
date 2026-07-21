@@ -374,6 +374,70 @@ but the latter calls `KOI - Investigate Item` as a sub-playbook, which does not 
 
 ---
 
+## 7b. End-to-end scan → event test, 21 July 2026 **[LIVE]**
+
+Ran a controlled test: trigger a KOI scan on a Cortex-managed endpoint and watch for the resulting
+events. Target `win-workstation` (GCP `agentic-testbed`, 10.10.0.83, Cortex agent
+`290c8b85…`, `CONNECTED`, server-tagged `koi`). Driver: `scripts/trigger_koi_scan.py`.
+
+**What was proven:**
+
+1. **KOI is genuinely run-on-demand on Windows.** Both test hosts (`win-workstation`,
+   `koi-win-test`) had produced no events since 15 July — six days — while other hosts reported
+   continuously. Nothing is wrong with them; nothing had run the scan.
+2. **The scan works via `core-script-run`.** `KOI Deployment Script - Windows`
+   (uid `1235651ddbe44047a3f7dfe3f3b97003`) returned `COMPLETED_SUCCESSFULLY` in 135 s, then 60 s
+   on a second run. This is the same name→uid→run path the Script Runner playbook uses.
+3. **The mtime freshness proof works, and is now re-verified first-hand** (it was inherited from
+   the custom-pack investigation, §8). After the scan, `C:\ProgramData\Koi\settings.json`
+   (mtime 03:35:22) and `agent_policies.json` (mtime 03:35:03) both carried fresh timestamps —
+   proving an authenticated backend round trip. `agent_activity.jsonl` and
+   `agent_enforcement.log` were 0 bytes at 15 July, matching "zero when idle".
+4. **KOI → XSIAM ingestion is near-real-time.** An `mcp-gateway installed` event observed on the
+   KOI API at **03:54:59** appeared in `koi_koi_raw` stamped **03:54:59**, fetched within minutes.
+   The full pipeline is healthy.
+
+**What did not work, and why it matters:**
+
+5. **KOI events are change-driven, not scan-driven.** A scan of an unchanged host produced no
+   events at all. Triggering a scan is not sufficient to generate data — something must change.
+6. **A `pip install` from the Cortex agent is not inventoried.** `tabulate==0.9.0` installed
+   successfully, but landed in `C:\Windows\system32\config\systemprofile\AppData\Local\Python\…`
+   because the Cortex agent runs as **SYSTEM**. KOI never saw it:
+   `GET /inventory/tabulate/endpoints?marketplace=pypi&version=0.9.0` → **404**, while
+   `version=0.10.0` → 200 with two other hosts. PyPI inventory itself works (1,990 items on
+   `KOI_PAET`, 2,169 on `KOI_PLTS`), and `settings.json` shows `pypi.enabled = true`.
+   **To generate detectable activity, the change must occur in a user profile the agent scans —
+   not in the SYSTEM profile.**
+7. **Neither test host appears in `GET /devices`** (51 devices on `KOI_PAET`) despite both having
+   events in `koi_koi_raw`. No `devices/archived` event exists for either. Unexplained — treat the
+   device list as **not** a complete inventory of hosts that have reported.
+
+**Two API behaviours worth documenting:**
+
+- An unknown `(item_id, marketplace, version)` triple returns **HTTP 404**, not an empty 200. Any
+  playbook calling `koi-inventory-item-get` or `koi-inventory-item-endpoints-list` with a version
+  that is not in inventory gets an error, not an empty result. Handle it as continue-on-error.
+- `GET /devices` **ignores a `hostname` filter parameter** — it returns the full list regardless.
+  Filter client-side.
+
+### 7b.1 ⚠️ Tenant attribution has stopped being populated
+
+| Window | Rows | with `koi_tenant_name` | with `koi_customer_id` |
+|---|---|---|---|
+| Last 90 days | 20,522 | 20,324 | 20,324 |
+| **Last 3 hours** | **75** | **0** | **0** |
+
+Every recently-ingested row lacks **both** fields. This directly affects the ported modeling rule,
+which maps `xdm.observer.name = coalesce(koi_tenant_name, koi_customer_id)` and
+`xdm.observer.unique_identifier = koi_customer_id` — **both resolve to null on current data.**
+
+The mapping is not wrong, and the historical data supports it, but anyone relying on
+`xdm.observer.name` to tell two KOI tenants apart will get nothing for events ingested from now
+on. Re-check whether this is a transient KOI-side change before removing the mapping.
+
+---
+
 ## 8. Carried forward from the custom-pack investigation
 
 These are pack-independent (`SESSION_BRIEF.md` §6) and were **not** re-verified in this session.
