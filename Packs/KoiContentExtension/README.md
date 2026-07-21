@@ -136,6 +136,36 @@ Those three are not all present on the alert, so every playbook that calls it fi
 `koi-inventory-list item_id=… limit=1` to recover `marketplace` and `version`. Do not "simplify" that
 first call away. `koi-inventory-item-get` is deliberately never called anywhere in this pack.
 
+### 7. The event and API `marketplace` vocabularies are different
+
+A KOI **event** says `software_windows`, `chrome`, `vsc`, `jet`, `npp`, `openvsx`, `edge`, `firefox`,
+`github`, `software_mac`. The KOI **API** — and the `predefined` list on every `marketplace` argument
+in `Koi.yml` v1.2.3 — wants `windows`, `chrome_web_store`, `vscode`, `jetbrains`, `notepad++`,
+`open_vsx_registry`, `edge_add_ons`, `firefox_add_ons`, `github_mcp_registry`, `mac`. Only `npm` and
+`pypi` are spelled the same in both. Passing an event value to a command returns **HTTP 400**.
+
+Three event values have **no** API equivalent and are treated as "unknown marketplace": `ollama`
+(absent from the API's list) and `built_in` / `side_loaded` (`installation_method` values leaking
+into the `marketplace` field).
+
+The pack handles this in two places, both from the same table:
+
+- **Ingestion** — the parsing rule adds `marketplace_api` (Audit) and `item_marketplace_api`
+  (Alerts) alongside the untouched verbatim fields, and the modeling rule maps the `_api` form to
+  `xdm.target.resource.sub_type`.
+- **Playbooks** — `KOI Ext - Extract Alert Context` publishes `KoiContext.marketplace_raw` (verbatim)
+  and `KoiContext.marketplace` (API-safe). `KOI Ext - Investigate Item`, `KOI Ext - Enrich Item` and
+  `KOI Ext - Block and Remediate` each map their `marketplace` **input** too, so they are safe to
+  drive from raw event data — including audit-driven flows, where `software_windows` is the single
+  most common value in the dataset. The map contains the 22 API values as identity rows, so it is
+  idempotent and a value that is already in API form is unaffected.
+
+A `marketplace` read from `Koi.Inventory.marketplace` is a **command output**, is already
+API-canonical, and is deliberately **never** re-mapped — allow-listing a command output against a
+static table would silently drop a marketplace KOI adds to the API later. An unmapped value becomes
+**empty**, which every playbook recovers from with `koi-inventory-list item_id=… limit=1`; a wrong
+value is an unrecoverable 400.
+
 ---
 
 ## What this pack ships

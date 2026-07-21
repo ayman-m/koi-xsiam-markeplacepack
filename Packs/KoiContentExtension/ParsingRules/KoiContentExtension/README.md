@@ -20,8 +20,8 @@ Two statements:
 
 | Statement | Scope | Effect |
 |---|---|---|
-| A | `filter source_log_type = "Audit"` | `alter _time = created_at` — the only thing done to audit rows |
-| B | `filter source_log_type = "Alerts"` | promotes **28** flat columns out of the nested OCSF `finding_info` / `observables` / `resources` JSON (plus 2 working intermediates, `resources_str` / `observables_str`, which also persist as columns) |
+| A | `filter source_log_type = "Audit"` | `alter _time = created_at`, then promotes **`marketplace_api`** — the audit `marketplace` column mapped into the Koi API vocabulary |
+| B | `filter source_log_type = "Alerts"` | promotes **29** flat columns out of the nested OCSF `finding_info` / `observables` / `resources` JSON (plus 2 working intermediates, `resources_str` / `observables_str`, which also persist as columns) |
 
 `no_hit=keep` is required: rows matching neither filter still land in the dataset.
 
@@ -29,7 +29,7 @@ Two statements:
 
 **These two rules must be deployed together.** The modeling rule
 (`ModelingRules/KoiContentExtension/`) does not re-walk the JSON — its Alerts block reads the flat
-columns this rule creates (`item_id`, `item_type`, `item_marketplace`, `device_id`,
+columns this rule creates (`item_id`, `item_type`, `item_marketplace_api`, `device_id`,
 `alert_hostname`, `device_os_obs`, `device_last_user`, `finding_uid`, `finding_title`,
 `alert_type`).
 
@@ -44,6 +44,32 @@ evaluates `if(null = "windows", …)`, falls through the chain, and lands on the
 
 The **Audit block is standalone** — it reads only raw columns and consumes zero parsing-rule
 output. Its only tie to this file is `_time`.
+
+## The two marketplace vocabularies
+
+Koi states the same fact in two different vocabularies, and only one of them is accepted by the
+Koi API. This rule therefore promotes **both**, and never conflates them.
+
+| Column | Vocabulary | Use it for |
+|---|---|---|
+| `item_marketplace` (Alerts) | short **event** form — `chrome`, `vsc`, `software_windows` | display, and matching other raw event data |
+| `marketplace` (Audit, raw Koi column — not created here) | short **event** form | display |
+| **`item_marketplace_api`** (Alerts) | **API** form — `chrome_web_store`, `vscode`, `windows` | the `marketplace` argument of `koi-inventory-item-get`, `koi-inventory-item-endpoints-list`, `koi-blocklist-items-add` and every other command that takes it |
+| **`marketplace_api`** (Audit) | **API** form | same |
+
+Passing a short form to a command returns **HTTP 400**. Only `npm` and `pypi` are spelled the same
+in both vocabularies, so almost everything else breaks. Verified 21 July 2026 against
+`GET /inventory?marketplace=`.
+
+Three values have **no** API equivalent and are mapped to **NULL**, deliberately: `built_in` (829
+events) and `side_loaded` (1) are `installation_method` values leaking into the `marketplace`
+field, and `ollama` (5) is absent from the API's list entirely. A null `*_api` column means
+"unknown marketplace — cannot call an item-scoped command", **not** "fall back to the raw value".
+
+The mapping is not guesswork. The alert payload carries the field twice: the observable
+`item.marketplace` is the short form while the item resource's `data.marketplace` is already the
+API form, and on live rows the two agree with this table 296/296 — Koi itself says
+`chrome` → `chrome_web_store`.
 
 ## Parsing applies AT INGEST ONLY
 

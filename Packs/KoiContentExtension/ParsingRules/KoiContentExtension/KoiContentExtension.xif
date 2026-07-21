@@ -38,7 +38,48 @@
 // kept as a cheap guard against an integration change — it is NOT a fix for
 // a broken timestamp, and must not be described as one.
 filter source_log_type = "Audit"
-| alter _time = created_at;
+| alter _time = created_at
+// ── marketplace_api — NEW. The Audit twin of item_marketplace_api below. ──
+// Same defect, same fix, same vocabulary table; see the long comment on
+// item_marketplace_api at the foot of the Alerts block for the full rationale.
+//
+// Worth adding here? Yes, and by a wide margin. Live check on the raw `marketplace`
+// column, 90 days (21 July 2026): 13,849 of 20,170 audit rows carry a value, and the
+// SINGLE MOST COMMON one — software_windows, 5,294 rows — is a short form the API
+// rejects with HTTP 400. Ranked: software_windows 5,294 · pypi 4,674 · chrome 891 ·
+// built_in 828 · npm 775 · software_mac 617 · homebrew 231 · vsc 175 · chocolatey 91 ·
+// cursor 88 · github 65 · edge 48 · firefox 19 · docker 15 · npp 12 · openvsx 10 ·
+// jet 5 · claude_desktop_extensions 5 · ollama 5 · side_loaded 1 · (null 6,321).
+// So 7,136 of the 13,849 populated rows (52%) would 400 if passed through unchanged.
+// An audit-driven flow is exactly the case that breaks on the most common value in
+// the whole dataset.
+//
+// `marketplace` itself is UNTOUCHED — it stays the verbatim Koi event value.
+| alter marketplace_api = if(
+    marketplace = "software_windows", "windows",
+    marketplace = "software_mac",     "mac",
+    marketplace = "chrome",           "chrome_web_store",
+    marketplace = "edge",             "edge_add_ons",
+    marketplace = "firefox",          "firefox_add_ons",
+    marketplace = "vsc",              "vscode",
+    marketplace = "jet",              "jetbrains",
+    marketplace = "npp",              "notepad++",
+    marketplace = "openvsx",          "open_vsx_registry",
+    marketplace = "github",           "github_mcp_registry",
+    // Already-API values pass through unchanged. This whitelist is the complete
+    // `predefined` list of the marketplace argument in Koi.yml v1.2.3 (all 22
+    // values, on all 7 commands that take the argument) — verified against
+    // reference/marketplace-pack.json, not typed from memory.
+    marketplace in ("chocolatey", "chrome_web_store", "claude_desktop_extensions", "cursor",
+                    "docker", "edge_add_ons", "firefox_add_ons", "github_mcp_registry",
+                    "homebrew", "hugging_face", "jetbrains", "linux", "mac", "notepad++",
+                    "npm", "office_add_ins", "open_vsx_registry", "pypi", "visual_studio",
+                    "vscode", "windows", "windsurf"), marketplace,
+    // Everything else -> NULL, deliberately. built_in (828) and side_loaded (1) are
+    // installation_method values leaking into the marketplace field; ollama (5) is
+    // absent from the API's list entirely. All three are "unknown marketplace" and
+    // must never reach a command argument.
+    to_string(null));
 
 filter source_log_type = "Alerts"
 | alter
@@ -98,6 +139,12 @@ filter source_log_type = "Alerts"
     // koi-inventory-item-endpoints-list, and nothing else in the alert payload
     // supplies it. Without this column an alert cannot be enriched back
     // through the Marketplace integration's item-scoped commands.
+    //
+    // ⚠️ This column is the RAW EVENT value and is in the SHORT vocabulary.
+    // Do NOT pass it to a command — pass item_marketplace_api (added at the
+    // foot of this block) instead. Both are kept on purpose: the raw value is
+    // what the event said, the _api value is what the API accepts, and
+    // conflating the two is precisely the bug this pack exists to avoid.
     item_marketplace = coalesce(
         if(json_extract_scalar(observables_str, "$.0.name")="item.marketplace", json_extract_scalar(observables_str, "$.0.value"), null),
         if(json_extract_scalar(observables_str, "$.1.name")="item.marketplace", json_extract_scalar(observables_str, "$.1.value"), null),
@@ -252,4 +299,71 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.criticality"), null),
         if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.criticality"), null),
         if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.criticality"), null),
-        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.criticality"), null));
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.criticality"), null))
+// ── item_marketplace_api — NEW. The command-safe marketplace value. ─────────
+// A SEPARATE alter stage because it consumes item_marketplace, which is created
+// by the stage above. Same reason the resources_str/observables_str cache is its
+// own stage.
+//
+// WHY THIS EXISTS. The event vocabulary and the API vocabulary are DIFFERENT.
+// `marketplace` is a REQUIRED argument on koi-inventory-item-get,
+// koi-inventory-item-endpoints-list and koi-blocklist-items-add; feeding it the
+// raw event value returns HTTP 400 on every value except npm and pypi.
+// Verified 21 July 2026 by testing each value against GET /inventory?marketplace=.
+//
+// Frequencies across the whole dataset (90 days, both source_log_types), kept
+// here so a future editor can see which branches are load-bearing:
+//   software_windows 5,301 -> windows              chrome  891 -> chrome_web_store
+//   pypi   4,674 -> pypi (unchanged)               npm     775 -> npm (unchanged)
+//   software_mac       617 -> mac                  homebrew 231 -> homebrew
+//   vsc                175 -> vscode               chocolatey 91 -> chocolatey
+//   cursor              88 -> cursor               github    65 -> github_mcp_registry
+//   edge                48 -> edge_add_ons         firefox   19 -> firefox_add_ons
+//   docker              15 -> docker               npp       12 -> notepad++
+//   openvsx             10 -> open_vsx_registry    jet        5 -> jetbrains
+//   claude_desktop_extensions 5 -> unchanged
+//   built_in 829 · ollama 5 · side_loaded 1 -> NULL, no API equivalent.
+//
+// ON ALERTS SPECIFICALLY the exposure is small but real: item_marketplace is
+// npm on 293 rows and chrome on 3 (296 of 314 alerts; null on the 18 MCP alerts,
+// which carry no item.marketplace observable). Only the 3 chrome rows are wrong
+// today — but they are wrong 100% of the time, and silently.
+//
+// EVIDENCE THAT THE MAPPING TABLE IS RIGHT, not merely plausible: the alert
+// payload carries the SAME field twice in TWO DIFFERENT vocabularies.
+// observables[name="item.marketplace"] is the short form; the item resource
+// (resources[type="item"].data.marketplace) is already the API long form. On the
+// same rows, live: obs=npm/res=npm on 293, and obs=chrome/res=chrome_web_store
+// on 3. So Koi itself states chrome -> chrome_web_store in its own payload, and
+// the map below reproduces the vendor's own answer on 296/296 rows. (Caveat,
+// stated rather than glossed: that cross-check covers the 2 distinct values that
+// occur on alerts. The other 8 short forms are verified against the API's 400/200
+// responses, not against the resource block.)
+//
+// The map is idempotent: an already-long value falls through to the whitelist
+// branch and is returned unchanged. That is why it is safe to point this same
+// expression at either vocabulary.
+| alter item_marketplace_api = if(
+    item_marketplace = "software_windows", "windows",
+    item_marketplace = "software_mac",     "mac",
+    item_marketplace = "chrome",           "chrome_web_store",
+    item_marketplace = "edge",             "edge_add_ons",
+    item_marketplace = "firefox",          "firefox_add_ons",
+    item_marketplace = "vsc",              "vscode",
+    item_marketplace = "jet",              "jetbrains",
+    item_marketplace = "npp",              "notepad++",
+    item_marketplace = "openvsx",          "open_vsx_registry",
+    item_marketplace = "github",           "github_mcp_registry",
+    // All 22 values of the `marketplace` argument's predefined list in Koi.yml
+    // v1.2.3, taken from reference/marketplace-pack.json. Already-API values
+    // pass through unchanged.
+    item_marketplace in ("chocolatey", "chrome_web_store", "claude_desktop_extensions", "cursor",
+                         "docker", "edge_add_ons", "firefox_add_ons", "github_mcp_registry",
+                         "homebrew", "hugging_face", "jetbrains", "linux", "mac", "notepad++",
+                         "npm", "office_add_ins", "open_vsx_registry", "pypi", "visual_studio",
+                         "vscode", "windows", "windsurf"), item_marketplace,
+    // NULL means "unknown marketplace" — built_in / side_loaded (installation
+    // methods, not marketplaces) and ollama (not in the API's list at all).
+    // A playbook must treat null here as "cannot call an item-scoped command",
+    // NOT as "try the raw value instead".
+    to_string(null));

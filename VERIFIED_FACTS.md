@@ -438,6 +438,58 @@ on. Re-check whether this is a transient KOI-side change before removing the map
 
 ---
 
+## 7c. ⚠️ The event and API `marketplace` vocabularies are different **[LIVE]**
+
+**This breaks any content that reads `marketplace` from an event and passes it to a command.**
+Verified 21 July 2026 by testing every value against `GET /inventory?marketplace=`.
+
+The `marketplace` field in `koi_koi_raw` uses **short forms**; the API (and the pack's YAML
+`predefined` list) uses **long forms**. Only `npm` and `pypi` are spelled the same in both.
+Everything else returns **HTTP 400** if passed through unchanged.
+
+| Event value (`koi_koi_raw`) | Events | API / YAML value | API items |
+|---|---|---|---|
+| `software_windows` | 5,301 | `windows` | 214 |
+| `pypi` | 4,674 | `pypi` | 1,990 |
+| `chrome` | 891 | `chrome_web_store` | 63 |
+| `built_in` | 829 | **none — see below** | — |
+| `npm` | 775 | `npm` | 325 |
+| `software_mac` | 617 | `mac` | 192 |
+| `homebrew` | 231 | `homebrew` | 322 |
+| `vsc` | 175 | `vscode` | 64 |
+| `chocolatey` | 91 | `chocolatey` | 28 |
+| `cursor` | 88 | `cursor` | 11 |
+| `github` | 65 | `github_mcp_registry` | 0 |
+| `edge` | 48 | `edge_add_ons` | 11 |
+| `firefox` | 19 | `firefox_add_ons` | 22 |
+| `docker` | 15 | `docker` | 5 |
+| `npp` | 12 | `notepad++` | 5 |
+| `openvsx` | 10 | `open_vsx_registry` | 0 |
+| `jet` | 5 | `jetbrains` | 1 |
+| `ollama` | 5 | **none** | — |
+| `claude_desktop_extensions` | 5 | `claude_desktop_extensions` | 3 |
+| `side_loaded` | 1 | **none — see below** | — |
+
+**Three values have no API equivalent.** `ollama` simply is not in the API's list. `built_in`
+(829 events) and `side_loaded` are **`installation_method` values leaking into the `marketplace`
+field** — the YAML declares `installation_method` as `[marketplace, manual, built_in,
+side_loaded]`. Content must treat a `marketplace` of `built_in` / `side_loaded` as "unknown
+marketplace", not pass it on.
+
+Also note **15 of the 22 declared values never appear in the data at all**: `chrome_web_store`,
+`edge_add_ons`, `firefox_add_ons`, `github_mcp_registry`, `hugging_face`, `jetbrains`, `linux`,
+`mac`, `notepad++`, `office_add_ins`, `open_vsx_registry`, `visual_studio`, `vscode`, `windows`,
+`windsurf`. They are valid API filters; they are just never what an event says.
+
+> **Consequence for this pack:** `KOI Ext - Extract Alert Context` reads `item.marketplace` from
+> the alert payload (`npm` 293, `chrome` 3 of 296) and downstream playbooks pass it to
+> `koi-inventory-item-get`, `koi-inventory-item-endpoints-list` and `koi-blocklist-items-add`,
+> all of which **require** `marketplace`. Unmapped, the `chrome` rows fail with HTTP 400 — and any
+> audit-driven flow using `software_windows` fails on the most common value in the dataset.
+> The mapping above must be applied between reading an event and calling a command.
+
+---
+
 ## 8. Carried forward from the custom-pack investigation
 
 These are pack-independent (`SESSION_BRIEF.md` §6) and were **not** re-verified in this session.
