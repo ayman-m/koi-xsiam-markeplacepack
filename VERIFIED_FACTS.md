@@ -512,16 +512,51 @@ Each value put through the shipped mapping and tested live against `GET /invento
 produced a failing command call. This is the clearest evidence that the mapping is load-bearing
 and not defensive polish.
 
-### 7d.2 The SYSTEM-profile hypothesis is confirmed
+### 7d.2 It is the PATH, not the installing process identity
 
-`tabulate==0.9.0` installed **as SYSTEM** (via the Cortex agent) produced **no event and no
-inventory record** (§7b.6). The same package installed **as a logged-in user with `--user`**
-produced an event within one scan: `tabulate 0.9.0`, `marketplace=pypi`, 06:06:06. KOI inventories
-user-profile installs and ignores the SYSTEM profile.
+Three installs, all driven from the Cortex agent (i.e. by a **SYSTEM** process), settle this:
 
-> **Practical consequence:** you cannot test KOI detection by installing software through an EDR
-> agent, because the agent runs as SYSTEM and the install lands where KOI does not look. Detection
-> testing requires an interactive user session.
+| Package / item | Target path | Detected? |
+|---|---|---|
+| `tabulate==0.9.0` | `C:\Windows\system32\config\systemprofile\…\site-packages` (SYSTEM profile) | **No** — `/inventory/…/endpoints?version=0.9.0` → 404 |
+| `inflection==0.5.1` | `C:\Users\amahmoud\AppData\Roaming\Python\Python314\site-packages` (user profile) | **Yes** — event at 09:55:12, `marketplace=pypi` |
+| `octocat/Hello-World` git clone | `C:\Users\amahmoud\Documents\koi-test-repo` (user profile) | **Yes** — event at 09:48:06 |
+
+`inflection` was verified absent from **both** site-packages directories beforehand, so the
+baseline was clean, and `.dist-info` metadata was present in both locations in the earlier
+`tabulate` case — ruling out missing metadata as the explanation.
+
+**KOI scans user-profile locations and ignores the SYSTEM profile. The identity of the installing
+process is irrelevant.**
+
+> **Practical consequence — this supersedes an earlier, wrong conclusion in this file.** Detection
+> testing **can** be automated through the EDR agent; it does not require an interactive user
+> session. The only requirement is that the change lands in a **user-profile path**. An earlier
+> revision of §7d.2 stated the opposite, on the basis of a single SYSTEM-profile install; the
+> controlled three-way comparison above corrects it.
+
+> ⚠️ **Beware the contaminated re-test.** An intermediate attempt re-installed `tabulate==0.9.0`
+> into the user site-packages and produced no event — which looked like a negative result but was
+> not: the user had already installed that exact package and version to that exact directory
+> hours earlier, and it had already been reported. KOI is change-driven (§7d), so a re-install of
+> an already-inventoried item is a no-op. **Any detection test must use an item verified absent
+> from the host beforehand.**
+
+### 7d.2a Git repositories are a discovered surface **[LIVE]**
+
+A `git clone` into a user profile is inventoried as a first-class item:
+
+```
+object_name  : octocat/Hello-World          (remote identity, not the local directory name)
+item_version : 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d   (the commit SHA)
+platform     : git          marketplace : github
+message      : "octocat/Hello-World" 7fd1a60b… (Git) installed from GitHub on win-workstation
+```
+
+Note the shape: the **remote** identifies the item and the **commit SHA is the version**, so every
+commit is a new version. `git.enabled = true` in the agent settings, and `repositories` is a valid
+`view` on `koi-inventory-list` — though, like `mcp_servers`, it is **not** offered in the pack
+YAML's `view` dropdown (§5.1).
 
 ### 7d.3 ⚠️ Events and inventory are separate surfaces with different latency
 
