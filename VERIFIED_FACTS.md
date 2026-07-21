@@ -490,6 +490,69 @@ Also note **15 of the 22 declared values never appear in the data at all**: `chr
 
 ---
 
+## 7d. Operator-driven test, 21 July 2026 — the mapping proved in production **[LIVE]**
+
+A real user session on `win-workstation` (RDP as `amahmoud`) installed Chrome extensions, VS Code
+plus extensions, and a `pip install --user`. A scan was then triggered. **19 events landed at
+06:06:06**, giving the first end-to-end test of the §7c mapping against data we caused.
+
+### 7d.1 The mapping was necessary for 16 of 19 events (84 %)
+
+Each value put through the shipped mapping and tested live against `GET /inventory?marketplace=`:
+
+| Event value | Events | Unmapped | Mapped to | Mapped result |
+|---|---|---|---|---|
+| `vsc` | 5 | **HTTP 400** | `vscode` | 200 (64 items) |
+| `software_windows` | 5 | **HTTP 400** | `windows` | 200 (214 items) |
+| `built_in` | 4 | **HTTP 400** | — not a marketplace | correctly never sent |
+| `chrome` | 3 | **HTTP 400** | `chrome_web_store` | 200 (63 items) |
+| `pypi` | 2 | 200 | `pypi` | 200 (1,990 items) |
+
+**Only `pypi` would have worked untouched.** Without the mapping, 16 of 19 events would have
+produced a failing command call. This is the clearest evidence that the mapping is load-bearing
+and not defensive polish.
+
+### 7d.2 The SYSTEM-profile hypothesis is confirmed
+
+`tabulate==0.9.0` installed **as SYSTEM** (via the Cortex agent) produced **no event and no
+inventory record** (§7b.6). The same package installed **as a logged-in user with `--user`**
+produced an event within one scan: `tabulate 0.9.0`, `marketplace=pypi`, 06:06:06. KOI inventories
+user-profile installs and ignores the SYSTEM profile.
+
+> **Practical consequence:** you cannot test KOI detection by installing software through an EDR
+> agent, because the agent runs as SYSTEM and the install lands where KOI does not look. Detection
+> testing requires an interactive user session.
+
+### 7d.3 ⚠️ Events and inventory are separate surfaces with different latency
+
+Items present in the **event stream** at 06:06:06 were still **absent from the inventory API** at
+06:21 — fifteen minutes later:
+
+| Item | In events (06:06) | `GET /inventory?item_display_name=` at 06:21 |
+|---|---|---|
+| Dark Reader (`chrome`) | yes | `total_count` **0** |
+| JSON Formatter (`chrome`) | yes | `total_count` **0** |
+| tabulate 0.9.0 (`pypi`) | yes | only `''` and `0.10.0` — **0.9.0 absent** |
+| tabulate 0.9.0 endpoints | — | **HTTP 404** |
+
+**This breaks the react-to-event-then-enrich pattern.** `KOI Ext - Alert Triage`,
+`KOI Ext - Investigate Item` and `KOI Ext - Enrich Item` all take an item from an alert and look
+it up with `koi-inventory-list` / `koi-inventory-item-endpoints-list`. For the newest item — the
+one an alert is most likely about — that lookup returns nothing or 404, **not because the item is
+unknown to KOI, but because the inventory index has not caught up.**
+
+Content must therefore treat "no inventory record" as **inconclusive**, never as "item not
+present in the org". The ported playbooks already run these lookups continue-on-error, which is
+correct; the wording of any verdict derived from an empty lookup must not assert absence.
+
+### 7d.4 The observer regression holds on operator-generated events
+
+All **19 rows carry no `koi_tenant_name`** (and no `koi_customer_id`), confirming §7b.1 on data we
+produced ourselves rather than another tenant's traffic. `xdm.observer.name` and
+`xdm.observer.unique_identifier` are null on current ingestion.
+
+---
+
 ## 8. Carried forward from the custom-pack investigation
 
 These are pack-independent (`SESSION_BRIEF.md` §6) and were **not** re-verified in this session.
