@@ -1,0 +1,1105 @@
+id: KOI Ext - Extract Alert Context
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Extract Alert Context
+description: |-
+  Sub-playbook. Builds the KoiContext object that the rest of the KOI Ext triage chain
+  consumes, by reading the KOI alert's OWN OCSF payload.
+
+  PACK: KOI Content Extension. Extends the Marketplace KOI pack v1.2.3 (13 commands,
+  integration only). This playbook calls NO KOI command - it only reads alert fields.
+
+  WHY THIS IS A REWRITE, NOT A PORT
+  The custom pack's "KOI - Extract Alert Context" regex-extracted a `koi_context={...}`
+  JSON blob out of the alert description. That blob does not exist: neither the custom
+  nor the Marketplace integration ever emits it. On this data the regex matches nothing,
+  KoiContext stays empty, and every downstream playbook silently degrades. This version
+  reads the fields that ARE present - verified on 314 of 314 Alerts rows in koi_koi_raw
+  over 90 days.
+
+  WHAT IT READS
+    finding_info  -> uid (finding_uid), title (finding_title), types[0] (alert_type)
+    observables[] matched by .name -> item.id, item.type, item.version,
+                                     item.marketplace, device.os, device.serial, event.id
+    resources[]   matched by .type -> type=device: data.id, data.hostname,
+                                                   data.last_logged_on_user
+                                     type=item:   data.package_name, data.risk_level
+                                     type=mcp:    data.mcp_id, data.risk_level
+
+  RESOURCES / OBSERVABLES / METADATA ARRIVE AS JSON STRINGS, NOT OBJECTS. The first three
+  tasks ParseJSON them; no accessor resolves before that. This is the single most common
+  way this playbook is broken by editing.
+
+  RESOURCE LAYOUT IS NOT POSITIONALLY STABLE - resources[0].type is "item" on 296 alerts
+  and "mcp" on 18. Every accessor here therefore selects by .name / .type, never by index.
+  Do not "simplify" these to fixed indexes.
+
+  SCALARS: every field is coerced with a join transformer so KoiContext.<field> resolves
+  as a scalar, not a 1-element array. This replaces the original's single
+  "KoiContext = ${KoiContext.[0]}" collapse task, which only worked because
+  RegexExtractAll produced an array-of-one; here the object is assembled field by field,
+  so the coercion is applied per field instead. Applying "[0]" to this object would wipe it.
+
+  IF THE PACK'S PARSING RULE IS DEPLOYED these same values are also available as promoted
+  columns (item_id, alert_hostname, device_id, finding_uid, ...). This playbook deliberately
+  reads the raw payload so it works either way, including on alerts ingested before the
+  parsing rule was deployed - parsing rules apply at ingestion only and never reprocess
+  history.
+
+  KNOWN LIMITS ON LIVE DATA
+  - alert_type has exactly ONE value in 90 days: "policy_violation". Do not build branching
+    logic on it; there is nothing to branch on.
+  - item.marketplace is absent on MCP alerts (0/18) and carries the literal "chrome" on 3
+    alerts, which is NOT a value the KOI API accepts - the API enum is "chrome_web_store".
+    Downstream item commands take marketplace as a REQUIRED argument, so when
+    KoiContext.marketplace is empty or rejected, resolve it with
+    koi-inventory-list(item_id=..., limit=1) and read Koi.Inventory.marketplace.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koixac00-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koixac00-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '1':
+    id: '1'
+    taskid: koixac00-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000001
+      version: -1
+      name: Parse finding_info
+      description: 'The alert''s finding_info arrives as a JSON string. ParseJSON it into KoiRaw.finding_info before any accessor is used. Best-effort: a missing field must not stop the chain.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiRaw.finding_info
+      value:
+        complex:
+          root: inputs.finding_info
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#error#':
+      - '2'
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '2':
+    id: '2'
+    taskid: koixac00-0000-4000-8000-000000000002
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000002
+      version: -1
+      name: Parse observables
+      description: The alert's observables column is a JSON STRING containing an array of {name, value} pairs. ParseJSON it into KoiRaw.observables. Observed length 7 on extension alerts, 6 on MCP alerts.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiRaw.observables
+      value:
+        complex:
+          root: inputs.observables
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#error#':
+      - '3'
+      '#none#':
+      - '3'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '3':
+    id: '3'
+    taskid: koixac00-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000003
+      version: -1
+      name: Parse resources
+      description: 'The alert''s resources column is a JSON STRING containing an array of {type, data, criticality}. ParseJSON it into KoiRaw.resources. Layout is NOT stable: [0].type is "item" on extension alerts and "mcp" on MCP alerts, so every accessor below filters on .type.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiRaw.resources
+      value:
+        complex:
+          root: inputs.resources
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#error#':
+      - '4'
+      '#none#':
+      - '4'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '4':
+    id: '4'
+    taskid: koixac00-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000004
+      version: -1
+      name: Set item_id
+      description: observables[name="item.id"].value. Coverage 314/314. Example "@playwright/test", "cortex-mcp".
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.item_id
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: item.id
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '5':
+    id: '5'
+    taskid: koixac00-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000005
+      version: -1
+      name: Set item_type
+      description: observables[name="item.type"].value. Coverage 314/314. Values seen - extension (296), mcp_server (18).
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.item_type
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: item.type
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '6'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '6':
+    id: '6'
+    taskid: koixac00-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000006
+      version: -1
+      name: Set item_version
+      description: observables[name="item.version"].value. Coverage 314/314. This is the version that TRIGGERED the alert; it is not necessarily the version the org's inventory record reports.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.item_version
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: item.version
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '21'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '21':
+    id: '21'
+    taskid: koixac00-0000-4000-8000-000000000021
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000021
+      version: -1
+      name: Set version (alias of item_version)
+      description: Compatibility alias. KoiContext.item_version is the canonical field; callers ported from the custom pack address it as KoiContext.version. Both are published so a caller reading either gets the value instead of a silent blank. If you retire one, retire the alias, not item_version.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.version
+      value:
+        simple: ${KoiContext.item_version}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '7'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 850, "y": 1050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '7':
+    id: '7'
+    taskid: koixac00-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000007
+      version: -1
+      name: Set marketplace
+      description: 'observables[name="item.marketplace"].value. NEW - the original playbook never extracted this, yet marketplace is a REQUIRED argument on koi-inventory-item-get, koi-inventory-item-endpoints-list and all four allowlist/blocklist add/remove commands. Coverage 296/314: npm 293, chrome 3, ABSENT on all 18 MCP alerts. Caveat: the literal "chrome" is not in the API enum (which expects chrome_web_store) - when this is empty or rejected, resolve it via koi-inventory-list(item_id=..., limit=1) and read Koi.Inventory.marketplace.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.marketplace
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: item.marketplace
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1220}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '8':
+    id: '8'
+    taskid: koixac00-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000008
+      version: -1
+      name: Set koi_event_id
+      description: observables[name="event.id"].value. Coverage 314/314 but only 18 DISTINCT values across 314 alerts - this is a per-scan-batch UUID, not a per-occurrence one. Useful for grouping alerts from the same scan; do NOT treat it as a unique alert identity.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.koi_event_id
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: event.id
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '9'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1390}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '9':
+    id: '9'
+    taskid: koixac00-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000009
+      version: -1
+      name: Set device_os
+      description: observables[name="device.os"].value. Coverage 314/314. Values - linux (140), mac (104), windows (70).
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.device_os
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: device.os
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '10'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1560}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '10':
+    id: '10'
+    taskid: koixac00-0000-4000-8000-000000000010
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000010
+      version: -1
+      name: Set device_serial
+      description: observables[name="device.serial"].value. Coverage 314/314.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.device_serial
+      value:
+        complex:
+          root: KoiRaw.observables
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.observables.name
+              operator: isEqualString
+              right:
+                value:
+                  simple: device.serial
+          accessor: value
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1730}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '11':
+    id: '11'
+    taskid: koixac00-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000011
+      version: -1
+      name: Set device_id
+      description: resources[type="device"].data.id. Coverage 314/314. Selected by .type, never by index.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.device_id
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: isEqualString
+              right:
+                value:
+                  simple: device
+          accessor: data.id
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '12'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '12':
+    id: '12'
+    taskid: koixac00-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000012
+      version: -1
+      name: Set alert_hostname
+      description: resources[type="device"].data.hostname. Coverage 314/314.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.alert_hostname
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: isEqualString
+              right:
+                value:
+                  simple: device
+          accessor: data.hostname
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '13'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '13':
+    id: '13'
+    taskid: koixac00-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000013
+      version: -1
+      name: Set device_last_user
+      description: resources[type="device"].data.last_logged_on_user. Coverage 314/314. Note the sibling key data.network_user is present but literally null on every device resource - it is deliberately not extracted.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.device_last_user
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: isEqualString
+              right:
+                value:
+                  simple: device
+          accessor: data.last_logged_on_user
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '14'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2240}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '14':
+    id: '14'
+    taskid: koixac00-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000014
+      version: -1
+      name: Set package_name
+      description: data.package_name from resources[type="item"] on extension alerts (296/314) or resources[type="mcp"] on MCP alerts (18/18). One filter covers both because the two resource types are mutually exclusive on any given alert - this is the coalesce, expressed as an inList filter rather than a fixed index.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.package_name
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: inList
+              right:
+                value:
+                  simple: item,mcp
+          accessor: data.package_name
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '15'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2410}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '15':
+    id: '15'
+    taskid: koixac00-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000015
+      version: -1
+      name: Set risk_level
+      description: 'data.risk_level from resources[type="item"] (296/314) or resources[type="mcp"] (18/18). Same mutually-exclusive coalesce as package_name. Vocabulary matches Koi.Inventory.risk_level: low / medium / high / critical / pending. This is KOI''s risk at the moment the alert fired; the org inventory record read by KOI Ext - Investigate Item may differ.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.risk_level
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: inList
+              right:
+                value:
+                  simple: item,mcp
+          accessor: data.risk_level
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2580}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '16':
+    id: '16'
+    taskid: koixac00-0000-4000-8000-000000000016
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000016
+      version: -1
+      name: Set mcp_id
+      description: resources[type="mcp"].data.mcp_id. Present on MCP alerts only (18/18 of those, 0 of the 296 extension alerts). Empty on extension alerts is the correct result, not a failure.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.mcp_id
+      value:
+        complex:
+          root: KoiRaw.resources
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRaw.resources.type
+              operator: isEqualString
+              right:
+                value:
+                  simple: mcp
+          accessor: data.mcp_id
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '17'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2750}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '17':
+    id: '17'
+    taskid: koixac00-0000-4000-8000-000000000017
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000017
+      version: -1
+      name: Set finding_uid
+      description: finding_info.uid. Coverage 314/314, only 3 distinct values - this is the finding DEFINITION identity (the rule that fired), not a per-occurrence id. Correct behaviour, not a bug.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.finding_uid
+      value:
+        complex:
+          root: KoiRaw.finding_info
+          accessor: uid
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '18'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2920}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '18':
+    id: '18'
+    taskid: koixac00-0000-4000-8000-000000000018
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000018
+      version: -1
+      name: Set finding_title
+      description: finding_info.title. Coverage 314/314. Example "NPM Block CS". This is the most useful human-readable discriminator available, since alert_type is constant.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.finding_title
+      value:
+        complex:
+          root: KoiRaw.finding_info
+          accessor: title
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '19'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3090}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '19':
+    id: '19'
+    taskid: koixac00-0000-4000-8000-000000000019
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000019
+      version: -1
+      name: Set alert_type
+      description: 'finding_info.types[0]. Coverage 314/314, but exactly ONE distinct value in 90 days: "policy_violation". finding_info.types has array_length 1 on 314/314, so the join collapses it losslessly. WARNING - do not write branching logic on this field; on live data there is nothing to branch on. Branch on finding_title or risk_level instead.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.alert_type
+      value:
+        complex:
+          root: KoiRaw.finding_info
+          accessor: types
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '20'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3260}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '20':
+    id: '20'
+    taskid: koixac00-0000-4000-8000-000000000020
+    type: title
+    task:
+      id: koixac00-0000-4000-8000-000000000020
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3430}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3540, "width": 380, "x": 450, "y": 50}}}'
+inputs:
+- key: finding_info
+  value:
+    simple: ${alert.finding_info}
+  required: false
+  description: The alert's OCSF finding_info object (JSON string). Defaults to the alert field of the same name. If your correlation rule surfaces it under a different name, repoint this input - do not edit the tasks.
+  playbookInputQuery: null
+- key: observables
+  value:
+    simple: ${alert.observables}
+  required: false
+  description: The alert's OCSF observables array, as a JSON STRING. Defaults to the alert field of the same name.
+  playbookInputQuery: null
+- key: resources
+  value:
+    simple: ${alert.resources}
+  required: false
+  description: The alert's OCSF resources array, as a JSON STRING. Defaults to the alert field of the same name.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiContext
+  description: The KOI alert context object, assembled from the alert's own OCSF payload.
+  type: unknown
+- contextPath: KoiContext.item_id
+  description: The flagged item's ID (package / extension / MCP identifier). From observables[name="item.id"].
+  type: string
+- contextPath: KoiContext.marketplace
+  description: The item's marketplace. From observables[name="item.marketplace"]. Empty on MCP alerts; may carry "chrome" where the KOI API expects "chrome_web_store".
+  type: string
+- contextPath: KoiContext.item_type
+  description: extension | mcp_server. From observables[name="item.type"].
+  type: string
+- contextPath: KoiContext.item_version
+  description: The item version that triggered the alert. From observables[name="item.version"].
+  type: string
+- contextPath: KoiContext.version
+  description: Compatibility alias of KoiContext.item_version, for callers ported from the custom pack.
+  type: string
+- contextPath: KoiContext.risk_level
+  description: KOI's risk level for the item or MCP server at alert time (low/medium/high/critical/pending).
+  type: string
+- contextPath: KoiContext.package_name
+  description: The item or MCP server package name.
+  type: string
+- contextPath: KoiContext.mcp_id
+  description: The MCP server ID. MCP alerts only; empty on extension alerts.
+  type: string
+- contextPath: KoiContext.device_id
+  description: The affected device ID. From resources[type="device"].data.id.
+  type: string
+- contextPath: KoiContext.alert_hostname
+  description: The affected device hostname. From resources[type="device"].data.hostname.
+  type: string
+- contextPath: KoiContext.device_last_user
+  description: Last logged-on user on the affected device.
+  type: string
+- contextPath: KoiContext.device_os
+  description: The affected device OS (linux/mac/windows).
+  type: string
+- contextPath: KoiContext.device_serial
+  description: The affected device serial number.
+  type: string
+- contextPath: KoiContext.alert_type
+  description: 'The OCSF finding type. Constant on live data: "policy_violation".'
+  type: string
+- contextPath: KoiContext.finding_uid
+  description: The finding definition UID (not per-occurrence).
+  type: string
+- contextPath: KoiContext.finding_title
+  description: The finding title - the practical discriminator between alert kinds.
+  type: string
+- contextPath: KoiContext.koi_event_id
+  description: KOI scan-batch UUID. Shared across many alerts from the same scan; not a unique alert id.
+  type: string
+tags:
+- koi
+- koi-ext
+quiet: false

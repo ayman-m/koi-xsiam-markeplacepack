@@ -1,0 +1,1107 @@
+id: KOI Ext - Alert Triage
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Alert Triage
+description: |-
+  End-to-end triage for a KOI alert, for the Marketplace KOI pack (Koi, v1.2.3 — 13 commands,
+  integration only). Attach this as the playbook on KOI alerts ingested into Cortex XSIAM.
+
+  Flow: KOI Ext - Extract Alert Context parses the alert payload into KoiContext ->
+  the item is looked up in the organization's inventory -> KOI Ext - Investigate Item ->
+  the org blocklist is read -> KOI Ext - Investigate Device when the alert carries a device ->
+  a verdict is computed -> a triage summary is posted -> Benign is auto-closed, Malicious
+  raises severity and opens an ANALYST-GATED KOI Ext - Block and Remediate with auto_block
+  forced false, Suspicious is left open for review.
+
+  ============================================================================
+  ALERT_TYPE IS NOT USABLE AS A DISCRIMINATOR ON THIS DATA
+  ============================================================================
+  The custom pack's version of this playbook branched on KoiContext.alert_type values
+  "Removed from Marketplace" / "Publisher Compromised" / "Unvetted MCP Server" / "New Item".
+  Live validation of koi_koi_raw (314 Alerts rows, 90 days, tenant api-ayman.xdr.eu):
+  alert_type has EXACTLY ONE distinct value — "policy_violation" — on 314/314 rows. Every one
+  of those branches was dead. They have been removed rather than shipped as dead code, and
+  the verdict has been re-keyed onto signals that actually vary. alert_type is still shown in
+  the triage summary for the record; it is never tested.
+
+  ============================================================================
+  VERDICT MATRIX
+  ============================================================================
+  Four signals, all captured as scalars before any device-wide inventory call can overwrite
+  them. Labels are evaluated top to bottom; the first that matches wins.
+
+    A  KoiContext.risk_level      the alert's own risk level. Live distribution over 90 days:
+                                  low 204 | medium 52 | pending 47 | high 8 | critical 3.
+                                  (severity is 1:1 with this: Low/Medium/Informational/High/Critical.)
+    B  KoiContext.item_type       extension 296 | mcp_server 18.
+    C  KoiTriage.org_risk_level   Koi.Inventory.risk_level for this item from the organization's
+                                  own inventory — the substitute for the custom pack's
+                                  koi-koidex-risk-report. Empty when the item is not installed
+                                  anywhere in the org.
+    D  KoiTriage.blocklisted_item non-empty when item_id already appears in koi-blocklist-get.
+
+    MALICIOUS   if ANY of:  A in {critical, high}
+                            C in {critical, high}
+                            D non-empty
+      Rationale. A is the alert's own assessment and only 11 of 314 alerts reach high/critical,
+      so escalating all of them is affordable. C catches the case where the alert itself is
+      unremarkable but the same item is rated high/critical against the org's installed base.
+      D is a governance breach: the item is already forbidden org-wide and is still generating
+      alerts, which is worth an analyst either way.
+
+    SUSPICIOUS  if ANY of:  B = mcp_server
+                            A in {medium, pending}
+                            C = medium
+      Rationale. mcp_server is never auto-closed: MCP servers are the least-vetted surface in
+      the estate (live data: mcp_risk_level is "pending" on 16 of 18 and "critical" on 2 — the
+      distribution contains no assessed-low value at all), they are only 18 of 314 alerts so the
+      review cost is bounded, and they are the one item type whose alerts carry no marketplace,
+      which means automated response cannot address them anyway. "pending" is an unfinished
+      assessment, not a clean bill of health, so it must not close. medium on either the alert
+      or the org record stays open.
+
+    BENIGN      only if ALL of:  A = low  AND  B = extension
+      Rationale. Reached only after MALICIOUS and SUSPICIOUS have both failed, so by evaluation
+      order it also implies C is not high/critical/medium and the item is not blocklisted. This
+      is the single auto-close path and it is the narrowest of the three.
+
+    DEFAULT -> SUSPICIOUS. Anything unclassified — empty risk_level, an item_type or risk level
+      the vendor adds later, a failed lookup — stays open for a human. Suspicious remains the
+      safe default, exactly as in the original.
+
+  ============================================================================
+  SUBSTITUTIONS vs the custom pack (KOI v1.3.0, 26 commands)
+  ============================================================================
+    - koi-koidex-risk-report(item_id, marketplace)
+        -> koi-inventory-list(item_id, marketplace, limit=1)
+      Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level (captured as
+      KoiTriage.org_risk_level). koi-inventory-item-get is NOT usable as the substitute: it
+      requires item_id AND marketplace AND version, all three, and version is not known here.
+      Capability delta: this is the ORGANIZATION's risk record, not the vendor catalog's. An
+      item nobody in the org has installed returns nothing, so C is empty for exactly the
+      newly-appeared item an alert is most likely to be about, and the verdict then rests on
+      A, B and D. Koi.KoidexRiskReport.ai_risk_summary and the Koidex compliance block have no
+      equivalent among the 13 commands and are gone from the summary.
+    - Sub-playbooks repointed to KOI Ext - Extract Alert Context, KOI Ext - Investigate Item,
+      KOI Ext - Investigate Device and KOI Ext - Block and Remediate.
+
+  ============================================================================
+  ORDERING AND CONTEXT HAZARDS (do not reorder tasks casually)
+  ============================================================================
+    1. koi-inventory-list APPENDS to Koi.Inventory, and KOI Ext - Investigate Device lists up
+       to 500 items for a whole host into the same path. The org risk level and marketplace are
+       therefore captured into KoiTriage.* scalars BEFORE the device investigation runs. Move
+       the device task earlier and the verdict will start reading a device-wide array.
+    2. LastArrayElement, not FirstArrayElement, is used when reading Koi.Inventory — because the
+       path is appended to, the last element is this playbook's own lookup.
+    3. The blocklist read is inside the item branch, so KoiTriage.blocklisted_item is only ever
+       evaluated when an item_id exists.
+    4. marketplace: the alert observable carries "chrome" on 3 of 314 rows while the API's
+       vocabulary is "chrome_web_store", and MCP alerts carry no marketplace at all. The
+       inventory lookup's own Koi.Inventory.marketplace is preferred over the alert's value
+       when available, and KOI Ext - Block and Remediate re-resolves it by item_id if it is
+       still empty.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koiextri-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koiextri-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '1':
+    id: '1'
+    taskid: koiextri-0000-4000-8000-000000000001
+    type: playbook
+    task:
+      id: koiextri-0000-4000-8000-000000000001
+      version: -1
+      name: Extract KOI alert context
+      description: 'Parses the KOI alert''s own OCSF payload into KoiContext (item_id, marketplace, item_type, item_version, risk_level, device_id, alert_hostname, device_last_user, alert_type, finding_uid, finding_title). No arguments are passed: the sub-playbook''s inputs default to ${alert.finding_info}, ${alert.observables} and ${alert.resources}. If your correlation rule surfaces those under different names, repoint the inputs on KOI Ext - Extract Alert Context, not here.'
+      playbookId: KOI Ext - Extract Alert Context
+      iscommand: false
+      brand: ''
+      type: playbook
+    nexttasks:
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '2':
+    id: '2'
+    taskid: koiextri-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000002
+      version: -1
+      name: Is an item identifiable?
+      description: Gated on item_id alone, not on item_id + marketplace as in the custom pack. koi-inventory-list filters on item_id by itself, and MCP-server alerts never carry a marketplace - requiring one would drop 18 of 314 alerts out of the item path entirely.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.item_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '10'
+      'yes':
+      - '3'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '3':
+    id: '3'
+    taskid: koiextri-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000003
+      version: -1
+      name: Look the item up in the org inventory
+      description: 'Substitutes koi-koidex-risk-report, which does not exist in the Marketplace pack. Returns the ORGANIZATION''s record for the item: risk_level, risk score, publisher, signing, install and endpoint counts, and the API-canonical marketplace value.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        complex:
+          root: KoiContext
+          accessor: item_id
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      marketplace:
+        complex:
+          root: KoiContext
+          accessor: marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      limit:
+        simple: '1'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '4'
+      '#none#':
+      - '4'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 720, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '4':
+    id: '4'
+    taskid: koiextri-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000004
+      version: -1
+      name: Capture org risk level
+      description: Signal C of the verdict matrix, captured as a scalar now because the device investigation later appends up to 500 rows to Koi.Inventory. LastArrayElement reads this playbook's own lookup.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.org_risk_level
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk_level
+          transformers:
+          - operator: LastArrayElement
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '5':
+    id: '5'
+    taskid: koiextri-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000005
+      version: -1
+      name: Capture org risk score
+      description: Koi.Inventory.risk, the numeric score that accompanies risk_level. Display only.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.org_risk_score
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk
+          transformers:
+          - operator: LastArrayElement
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '6'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '6':
+    id: '6'
+    taskid: koiextri-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000006
+      version: -1
+      name: Seed marketplace from the alert
+      description: Baseline value, overwritten in the next task when the inventory lookup returned an authoritative one.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.marketplace
+      value:
+        simple: ${KoiContext.marketplace}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '7'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '7':
+    id: '7'
+    taskid: koiextri-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000007
+      version: -1
+      name: Prefer the inventory marketplace
+      description: Uses Set (not SetAndHandleEmpty) on purpose - Set does nothing when the value is empty, so the alert-derived baseline survives when the item is not in inventory. The API vocabulary is authoritative; the alert can carry "chrome" where the API expects "chrome_web_store".
+      iscommand: false
+      brand: ''
+      script: Set
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.marketplace
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: marketplace
+          transformers:
+          - operator: LastArrayElement
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 1050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '8':
+    id: '8'
+    taskid: koiextri-0000-4000-8000-000000000008
+    type: playbook
+    task:
+      id: koiextri-0000-4000-8000-000000000008
+      version: -1
+      name: Full KOI item investigation
+      description: Runs KOI Ext - Investigate Item to gather org risk and exposure (installs, signing, publisher, endpoints, users) and governance state, and to post an investigation summary to the war room. Catalog risk, the AI risk summary, remediation history and approval history are not available in this pack.
+      playbookId: KOI Ext - Investigate Item
+      iscommand: false
+      brand: ''
+      type: playbook
+    scriptarguments:
+      item_id:
+        simple: ${KoiContext.item_id}
+      marketplace:
+        simple: ${KoiTriage.marketplace}
+      version:
+        simple: ${KoiContext.item_version}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '9'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 1220}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '9':
+    id: '9'
+    taskid: koiextri-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000009
+      version: -1
+      name: Capture blocklist membership
+      description: Signal D of the verdict matrix. Filters the org blocklist that the investigation already read with koi-blocklist-get down to entries matching this item_id. Empty string when the item is not blocklisted.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.blocklisted_item
+      value:
+        complex:
+          root: Koi.Blocklist
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: Koi.Blocklist.item_id
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: KoiContext.item_id
+          accessor: item_id
+          transformers:
+          - operator: uniq
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ','
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '10'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 720, "y": 1390}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '10':
+    id: '10'
+    taskid: koiextri-0000-4000-8000-000000000010
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000010
+      version: -1
+      name: Is a device identifiable?
+      description: Only run the device investigation when the alert carries a device id. There is no device object in this pack - the device is a filter on inventory.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.device_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '12'
+      'yes':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1560}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '11':
+    id: '11'
+    taskid: koiextri-0000-4000-8000-000000000011
+    type: playbook
+    task:
+      id: koiextri-0000-4000-8000-000000000011
+      version: -1
+      name: Full KOI device investigation
+      description: Runs KOI Ext - Investigate Device to surface every risky item KOI sees on the alert's host. It clears and repopulates Koi.Inventory with device-wide records, which is why the item signals were captured as scalars above.
+      playbookId: KOI Ext - Investigate Device
+      iscommand: false
+      brand: ''
+      type: playbook
+    scriptarguments:
+      device_id:
+        simple: ${KoiContext.device_id}
+      hostname:
+        simple: ${KoiContext.alert_hostname}
+      risk_levels:
+        simple: ${inputs.device_risk_levels}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '12'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 200, "y": 1730}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '12':
+    id: '12'
+    taskid: koiextri-0000-4000-8000-000000000012
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000012
+      version: -1
+      name: Determine verdict
+      description: 'The verdict matrix. Labels are evaluated in order; first match wins. MALICIOUS: alert risk high/critical, OR org inventory risk high/critical, OR the item is already blocklisted. SUSPICIOUS: item_type mcp_server, OR alert risk medium/pending, OR org risk medium. BENIGN: alert risk low AND item_type extension (reachable only after both tests above failed). Default is Suspicious. alert_type is deliberately not tested - it has one value, policy_violation, on 314 of 314 live alerts.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: malicious
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: critical
+        - left:
+            iscontext: true
+            value:
+              simple: KoiContext.risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: high
+        - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.org_risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: critical
+        - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.org_risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: high
+        - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.blocklisted_item
+          operator: isNotEmpty
+          right:
+            value: {}
+    - label: suspicious
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.item_type
+          operator: isEqualString
+          right:
+            value:
+              simple: mcp_server
+        - left:
+            iscontext: true
+            value:
+              simple: KoiContext.risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: medium
+        - left:
+            iscontext: true
+            value:
+              simple: KoiContext.risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: pending
+        - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.org_risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: medium
+    - label: benign
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.risk_level
+          operator: isEqualString
+          right:
+            value:
+              simple: low
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.item_type
+          operator: isEqualString
+          right:
+            value:
+              simple: extension
+    nexttasks:
+      '#default#':
+      - '15'
+      malicious:
+      - '13'
+      suspicious:
+      - '15'
+      benign:
+      - '14'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '13':
+    id: '13'
+    taskid: koiextri-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000013
+      version: -1
+      name: Set verdict - Malicious
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.verdict
+      value:
+        simple: Malicious
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 60, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '14':
+    id: '14'
+    taskid: koiextri-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000014
+      version: -1
+      name: Set verdict - Benign
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.verdict
+      value:
+        simple: Benign
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '15':
+    id: '15'
+    taskid: koiextri-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000015
+      version: -1
+      name: Set verdict - Suspicious
+      description: Set a value in context under the key you entered. This is both the explicit Suspicious branch and the default for anything unclassified.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.verdict
+      value:
+        simple: Suspicious
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 840, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '16':
+    id: '16'
+    taskid: koiextri-0000-4000-8000-000000000016
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000016
+      version: -1
+      name: Build triage summary
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.summary
+      value:
+        simple: '## KOI Alert Triage — ${KoiTriage.verdict}
+
+          | Field | Value |
+
+          |---|---|
+
+          | Verdict | **${KoiTriage.verdict}** |
+
+          | Alert risk level (A) | ${KoiContext.risk_level} |
+
+          | Item type (B) | ${KoiContext.item_type} |
+
+          | Org inventory risk (C) | ${KoiTriage.org_risk_level} (score ${KoiTriage.org_risk_score}) |
+
+          | Already blocklisted (D) | ${KoiTriage.blocklisted_item} |
+
+          | Item | ${KoiContext.item_id} (${KoiTriage.marketplace}) |
+
+          | Item version | ${KoiContext.item_version} |
+
+          | Device | ${KoiContext.alert_hostname} (${KoiContext.device_id}) |
+
+          | Last user | ${KoiContext.device_last_user} |
+
+          | Alert type | ${KoiContext.alert_type} (constant "policy_violation" on this data - not used in the verdict) |
+
+          _Org inventory risk is the organization''s own record for this item, from koi-inventory-list. The Marketplace KOI pack v1.2.3 has no Koidex catalog risk report and no AI risk summary._'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '17'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2240}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '17':
+    id: '17'
+    taskid: koiextri-0000-4000-8000-000000000017
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000017
+      version: -1
+      name: Post triage summary
+      description: Prints the triage summary to the war room.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: ${KoiTriage.summary}
+    nexttasks:
+      '#none#':
+      - '18'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2410}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '18':
+    id: '18'
+    taskid: koiextri-0000-4000-8000-000000000018
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000018
+      version: -1
+      name: Route on verdict
+      description: Benign alerts are auto-closed; Malicious alerts are escalated and offered to the analyst-gated block; Suspicious alerts stay open for review.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: benign
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.verdict
+          operator: isEqualString
+          right:
+            value:
+              simple: Benign
+    - label: malicious
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.verdict
+          operator: isEqualString
+          right:
+            value:
+              simple: Malicious
+    nexttasks:
+      '#default#':
+      - '23'
+      benign:
+      - '19'
+      malicious:
+      - '20'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2580}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '19':
+    id: '19'
+    taskid: koiextri-0000-4000-8000-000000000019
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000019
+      version: -1
+      name: Auto-close benign alert
+      description: commands.local.cmd.close.inv
+      iscommand: true
+      brand: Builtin
+      script: Builtin|||closeInvestigation
+      type: regular
+    scriptarguments:
+      closeReason:
+        simple: Resolved
+      closeNotes:
+        simple: 'KOI triage: Benign — extension ${KoiContext.item_id} at alert risk level ${KoiContext.risk_level}, org inventory risk ${KoiTriage.org_risk_level}, not blocklisted. Auto-closed.'
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 200, "y": 2750}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '20':
+    id: '20'
+    taskid: koiextri-0000-4000-8000-000000000020
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000020
+      version: -1
+      name: Escalate - raise severity
+      description: Raises the alert severity for analyst attention.
+      iscommand: true
+      brand: ''
+      script: '|||setAlert'
+      type: regular
+    scriptarguments:
+      severity:
+        simple: '3'
+    nexttasks:
+      '#none#':
+      - '21'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 700, "y": 2750}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '21':
+    id: '21'
+    taskid: koiextri-0000-4000-8000-000000000021
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000021
+      version: -1
+      name: Item blockable?
+      description: A Malicious verdict can be reached without an identifiable item, so only open the block gate when there is an item_id. marketplace is not required here - KOI Ext - Block and Remediate resolves it from inventory and skips the write if it cannot.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.item_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '23'
+      'yes':
+      - '22'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 700, "y": 2920}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '22':
+    id: '22'
+    taskid: koiextri-0000-4000-8000-000000000022
+    type: playbook
+    task:
+      id: koiextri-0000-4000-8000-000000000022
+      version: -1
+      name: Open analyst-gated block
+      description: 'Runs KOI Ext - Block and Remediate for the flagged item: marketplace resolution, full investigation, already-blocklisted short-circuit, then an analyst approval gate. auto_block is forced false, so the blocklist write can never fire without human approval.'
+      playbookId: KOI Ext - Block and Remediate
+      iscommand: false
+      brand: ''
+      type: playbook
+    scriptarguments:
+      item_id:
+        simple: ${KoiContext.item_id}
+      marketplace:
+        simple: ${KoiTriage.marketplace}
+      version:
+        simple: ${KoiContext.item_version}
+      reason:
+        simple: 'KOI triage verdict Malicious — alert risk ${KoiContext.risk_level}, org inventory risk ${KoiTriage.org_risk_level}, item ${KoiContext.item_id} (${KoiContext.item_type})'
+      auto_block:
+        simple: 'false'
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 700, "y": 3090}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '23':
+    id: '23'
+    taskid: koiextri-0000-4000-8000-000000000023
+    type: title
+    task:
+      id: koiextri-0000-4000-8000-000000000023
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3260}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 1080, "x": 60, "y": 20}}}'
+inputs:
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use for every KOI command in this playbook and its sub-playbooks. Leave empty to let the platform pick the single enabled instance of the Marketplace KOI pack.
+  playbookInputQuery: null
+- key: device_risk_levels
+  value:
+    simple: high,critical
+  required: false
+  description: Comma-separated risk levels the device investigation flags as risky. Vocabulary - low, medium, high, critical, pending.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiTriage.verdict
+  description: The triage verdict (Benign / Suspicious / Malicious).
+  type: string
+- contextPath: KoiTriage.summary
+  description: The markdown triage summary.
+  type: string
+- contextPath: KoiTriage.org_risk_level
+  description: The organization's inventory risk level for the alerted item (signal C).
+  type: string
+- contextPath: KoiTriage.org_risk_score
+  description: The organization's numeric inventory risk score for the alerted item, captured alongside signal C.
+  type: number
+- contextPath: KoiTriage.marketplace
+  description: The resolved marketplace for the alerted item, preferring the inventory record over the alert payload.
+  type: string
+- contextPath: KoiTriage.blocklisted_item
+  description: The alerted item_id when it is already on the org blocklist, otherwise empty (signal D).
+  type: string
+tags:
+- koi
+- koi-ext
+quiet: false

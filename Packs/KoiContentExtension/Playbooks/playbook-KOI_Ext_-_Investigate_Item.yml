@@ -1,0 +1,1315 @@
+id: KOI Ext - Investigate Item
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Investigate Item
+description: |-
+  Sub-playbook. Comprehensive investigation of a KOI item, rebuilt from the command
+  surface that actually exists. Gathers the organization's inventory record, endpoint and
+  user exposure, and governance state (blocklist / allowlist) into a KoiInvestigation
+  object plus a war-room markdown summary. Best-effort throughout (continue-on-error).
+
+  PACK: KOI Content Extension. Extends the Marketplace KOI pack v1.2.3 (13 commands,
+  integration only). Every command used here is one of those 13.
+
+  WHY THIS IS A REBUILD
+  The custom pack's "KOI - Investigate Item" needed koi-koidex-risk-report,
+  koi-remediations-list and koi-approval-requests-list. NONE of the three exists in the
+  Marketplace pack. Three of its six commands were therefore not swapped but removed, and
+  the investigation was rebuilt around what remains.
+
+  SUBSTITUTED
+    koi-koidex-risk-report          -> koi-inventory-list(item_id, marketplace, limit=1)
+    Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level
+    Koi.KoidexRiskReport.risk       -> Koi.Inventory.risk
+
+  REMOVED, NO SUBSTITUTE EXISTS
+    ai_summary          (Koi.KoidexRiskReport.ai_risk_summary)
+    remediation_count   (koi-remediations-list / Koi.Remediation)
+    approval_count      (koi-approval-requests-list / Koi.ApprovalRequest)
+  Do not try to reconstruct the last two from koi_koi_raw audit rows. The audit log does
+  carry type="remediation" and type="approval_requests" events, but that is an XQL search,
+  not a command; it is bounded by dataset retention rather than KOI's full history; and
+  without the pack's parsing rule deployed there is no item_id column to join on.
+
+  ADDED, because these exist here and were not in the original
+    org_risk_score, status, findings_count, governed_details, allowlisted_count.
+  Allowlist state is now read alongside blocklist state: "not blocked" and "explicitly
+  allowed" are different governance answers and the original could only tell you the first.
+
+  WHAT THIS VERSION CANNOT TELL YOU - state this to any analyst using it
+  - No catalog / vendor-wide risk. Risk here is ORG-LOCAL: it comes from the organization's
+    own inventory record. An item that is not installed anywhere in the org returns NO
+    inventory record at all, so risk, publisher, signing and installs all come back empty -
+    for exactly the newly-appeared item an alert is most likely to be about. Empty risk is
+    not low risk.
+  - No AI risk summary.
+  - No remediation history - you cannot answer "has KOI ever remediated this item".
+  - No approval history - you cannot answer "was this item ever requested or approved".
+  The strengths that do survive are accurate: org installs, publisher, signing status,
+  endpoint and user exposure, findings, governed details, and blocklist / allowlist state.
+
+  CONTEXT COLLISION WARNING: koi-inventory-list, koi-inventory-item-get and
+  koi-inventory-search all write the same 27 Koi.Inventory.* paths and overwrite each other.
+  There is deliberately exactly one inventory call in this playbook. Do not add a second to
+  "also fetch" something - it will replace the first. koi-inventory-item-endpoints-list is
+  safe; it writes only Koi.Inventory.Endpoint.*.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koixiv00-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koixiv00-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '1':
+    id: '1'
+    taskid: koixiv00-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000001
+      version: -1
+      name: Coerce item_id to scalar
+      description: Playbook inputs arrive as 1-element arrays when fed from another playbook's outputs. Joining with an empty separator collapses them to a scalar so they can be used as command arguments and in filters.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.item_id
+      value:
+        complex:
+          root: inputs.item_id
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '2':
+    id: '2'
+    taskid: koixiv00-0000-4000-8000-000000000002
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000002
+      version: -1
+      name: Coerce marketplace to scalar
+      description: As above. May legitimately be empty - marketplace is an OPTIONAL filter on koi-inventory-list, and KOI Ext - Extract Alert Context cannot supply it on MCP alerts.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.marketplace_in
+      value:
+        complex:
+          root: inputs.marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '3'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '3':
+    id: '3'
+    taskid: koixiv00-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000003
+      version: -1
+      name: Org inventory record
+      description: 'The single source of risk in this playbook, substituting the custom pack''s koi-koidex-risk-report. Returns risk, risk_level, version, marketplace, status, installs_count, endpoint_count, is_signed, publisher_name, findings and governed_details for the organization''s record of the item. limit=1 keeps Koi.Inventory a single object so accessors resolve as scalars. koi-inventory-list is used rather than koi-inventory-item-get because item-get requires version, which is exactly what this playbook is trying to discover.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${Inv.item_id}
+      marketplace:
+        simple: ${Inv.marketplace_in}
+      limit:
+        simple: '1'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '25'
+      '#none#':
+      - '25'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '25':
+    id: '25'
+    taskid: koixiv00-0000-4000-8000-000000000025
+    type: condition
+    task:
+      id: koixiv00-0000-4000-8000-000000000025
+      version: -1
+      name: Did the caller supply a version?
+      description: 'ORDERING FIX. koi-inventory-item-endpoints-list requires version on this pack - the original playbook declared a version input, never used it, and relied entirely on the inventory record. Here a caller-supplied version wins (use it to investigate the version that triggered an alert rather than the version the org runs), and the org record is the fallback.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.version
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '27'
+      'yes':
+      - '26'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 620}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '26':
+    id: '26'
+    taskid: koixiv00-0000-4000-8000-000000000026
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000026
+      version: -1
+      name: Use the supplied version
+      description: Coerces the caller-supplied version to a scalar.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.version
+      value:
+        complex:
+          root: inputs.version
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '28'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 250, "y": 700}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '27':
+    id: '27'
+    taskid: koixiv00-0000-4000-8000-000000000027
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000027
+      version: -1
+      name: Use the org inventory version
+      description: Falls back to Koi.Inventory.version. Stays empty when the item is not in the org's inventory, which gates the endpoint lookup below.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.version
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: version
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '28'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 650, "y": 700}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '28':
+    id: '28'
+    taskid: koixiv00-0000-4000-8000-000000000028
+    type: condition
+    task:
+      id: koixiv00-0000-4000-8000-000000000028
+      version: -1
+      name: Did the caller supply a marketplace?
+      description: marketplace is also a REQUIRED argument on koi-inventory-item-endpoints-list. KOI Ext - Extract Alert Context cannot supply it on MCP alerts (item.marketplace is absent on all 18) and can supply the API-invalid literal "chrome", so the org inventory record is the safer fallback.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: Inv.marketplace_in
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '30'
+      'yes':
+      - '29'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 780}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '29':
+    id: '29'
+    taskid: koixiv00-0000-4000-8000-000000000029
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000029
+      version: -1
+      name: Use the supplied marketplace
+      description: Uses the caller-supplied marketplace.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.marketplace
+      value:
+        simple: ${Inv.marketplace_in}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '4'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 250, "y": 860}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '30':
+    id: '30'
+    taskid: koixiv00-0000-4000-8000-000000000030
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000030
+      version: -1
+      name: Use the org inventory marketplace
+      description: Falls back to Koi.Inventory.marketplace, which is always a value the KOI API accepts.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Inv.marketplace
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '4'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 650, "y": 860}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '4':
+    id: '4'
+    taskid: koixiv00-0000-4000-8000-000000000004
+    type: condition
+    task:
+      id: koixiv00-0000-4000-8000-000000000004
+      version: -1
+      name: Is a version known for the item?
+      description: koi-inventory-item-endpoints-list requires item_id AND marketplace AND version on this pack. Neither the caller nor the org inventory record produced a version, so the endpoint lookup cannot be made and is skipped rather than run and failed. A "no" here normally means the item is not installed anywhere in the organization - endpoint and user exposure will legitimately be empty.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: Inv.version
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '6'
+      'yes':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '5':
+    id: '5'
+    taskid: koixiv00-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000005
+      version: -1
+      name: Endpoints with the item
+      description: 'Endpoint and user exposure. item_id, marketplace and version are ALL required arguments here - this is why the inventory record is fetched first and why the two resolution branches above exist. Writes only Koi.Inventory.Endpoint.* and does not disturb the inventory record.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-item-endpoints-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${Inv.item_id}
+      marketplace:
+        simple: ${Inv.marketplace}
+      version:
+        simple: ${Inv.version}
+      limit:
+        simple: '200'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '6'
+      '#none#':
+      - '6'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '6':
+    id: '6'
+    taskid: koixiv00-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000006
+      version: -1
+      name: 'Governance: blocklist'
+      description: The current organization blocklist. The command takes no arguments - it returns the whole list, which is filtered to this item further down.
+      iscommand: true
+      brand: ''
+      script: '|||koi-blocklist-get'
+      type: regular
+    scriptarguments:
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '7'
+      '#none#':
+      - '7'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '7':
+    id: '7'
+    taskid: koixiv00-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000007
+      version: -1
+      name: 'Governance: allowlist'
+      description: 'The current organization allowlist. NEW - the original playbook read only the blocklist. Reading both distinguishes "not governed at all" from "explicitly allowed", which is the closest available stand-in for the approval history this pack cannot provide. Takes no arguments. Writes Koi.Allowlist.*, colliding with nothing.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-allowlist-get'
+      type: regular
+    scriptarguments:
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '8'
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1220}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '8':
+    id: '8'
+    taskid: koixiv00-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000008
+      version: -1
+      name: Set org_risk_level
+      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level. The original had BOTH catalog_risk_level and org_risk_level; with the catalog command gone they would be the same value, so they are collapsed into this one field rather than presented twice.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.org_risk_level
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk_level
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '9'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1390}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '9':
+    id: '9'
+    taskid: koixiv00-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000009
+      version: -1
+      name: Set org_risk_score
+      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk -> Koi.Inventory.risk. Replaces the original catalog_risk_score.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.org_risk_score
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '10'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1560}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '10':
+    id: '10'
+    taskid: koixiv00-0000-4000-8000-000000000010
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000010
+      version: -1
+      name: Set status
+      description: Koi.Inventory.status. New in this version - the KOI-side lifecycle status of the item in the organization.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.status
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: status
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1730}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '11':
+    id: '11'
+    taskid: koixiv00-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000011
+      version: -1
+      name: Set installs_count
+      description: Koi.Inventory.installs_count. Unchanged from the original.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.installs_count
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: installs_count
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '12'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '12':
+    id: '12'
+    taskid: koixiv00-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000012
+      version: -1
+      name: Set is_signed
+      description: Koi.Inventory.is_signed. Unchanged from the original.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.is_signed
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: is_signed
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '13'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '13':
+    id: '13'
+    taskid: koixiv00-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000013
+      version: -1
+      name: Set publisher
+      description: Koi.Inventory.publisher_name. Unchanged from the original.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.publisher
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: publisher_name
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '14'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2240}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '14':
+    id: '14'
+    taskid: koixiv00-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000014
+      version: -1
+      name: Set endpoint_count
+      description: Koi.Inventory.endpoint_count - the org-wide aggregate on the inventory record, not the number of endpoint rows returned above. Unchanged from the original.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.endpoint_count
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: endpoint_count
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '15'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2410}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '15':
+    id: '15'
+    taskid: koixiv00-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000015
+      version: -1
+      name: Set version
+      description: The version the investigation actually ran against - the caller's version if one was supplied, otherwise the version the organization runs. These are not necessarily the same, and the version that triggered an alert is not necessarily either.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.version
+      value:
+        simple: ${Inv.version}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2580}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '16':
+    id: '16'
+    taskid: koixiv00-0000-4000-8000-000000000016
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000016
+      version: -1
+      name: Set findings_count
+      description: Number of KOI findings on the org inventory record. New in this version. This is the org record's finding list - it is NOT the Koidex compliance report the removed catalog command returned, and should not be presented as one.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.findings_count
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: findings
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '17'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2750}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '17':
+    id: '17'
+    taskid: koixiv00-0000-4000-8000-000000000017
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000017
+      version: -1
+      name: Set governed_details
+      description: Koi.Inventory.governed_details - KOI's own record of how this item is governed. New in this version, and the nearest thing available to the removed approval history.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.governed_details
+      value:
+        simple: ${Koi.Inventory.governed_details}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '18'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2920}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '18':
+    id: '18'
+    taskid: koixiv00-0000-4000-8000-000000000018
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000018
+      version: -1
+      name: Set hostnames
+      description: Unique hostnames of endpoints carrying the item. Unchanged from the original - Koi.Inventory.Endpoint.* keeps the same shape on this pack.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.hostnames
+      value:
+        complex:
+          root: Koi.Inventory.Endpoint
+          accessor: hostname
+          transformers:
+          - operator: uniq
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '19'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3090}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '19':
+    id: '19'
+    taskid: koixiv00-0000-4000-8000-000000000019
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000019
+      version: -1
+      name: Set affected_users
+      description: Unique last-logged-on users on the endpoints carrying the item. Unchanged from the original. This is the only route to user attribution in the Marketplace pack - there is no koi-users-list and no Koi.Device.* prefix; endpoints are reachable only from an item.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.affected_users
+      value:
+        complex:
+          root: Koi.Inventory.Endpoint
+          accessor: last_logged_on_user
+          transformers:
+          - operator: uniq
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '20'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3260}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '20':
+    id: '20'
+    taskid: koixiv00-0000-4000-8000-000000000020
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000020
+      version: -1
+      name: Set blocklisted_count
+      description: Filters the full blocklist down to this item and counts the matches. Non-zero means the item is already blocked. Unchanged from the original.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.blocklisted_count
+      value:
+        complex:
+          root: Koi.Blocklist
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: Koi.Blocklist.item_id
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: Inv.item_id
+          accessor: item_id
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '21'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3430}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '21':
+    id: '21'
+    taskid: koixiv00-0000-4000-8000-000000000021
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000021
+      version: -1
+      name: Set allowlisted_count
+      description: Filters the full allowlist down to this item and counts the matches. New in this version - it replaces nothing, but it is what stops an analyst reading "blocklisted_count = 0" as "ungoverned" when the item was in fact deliberately allowed.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.allowlisted_count
+      value:
+        complex:
+          root: Koi.Allowlist
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: Koi.Allowlist.item_id
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: Inv.item_id
+          accessor: item_id
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '22'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3600}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '22':
+    id: '22'
+    taskid: koixiv00-0000-4000-8000-000000000022
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000022
+      version: -1
+      name: Set summary
+      description: 'Builds the war-room markdown summary. Four rows of the original are gone: catalog risk, AI risk summary, remediations and approvals. The footer states that plainly rather than leaving an analyst to assume the blanks mean "nothing found".'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.summary
+      value:
+        simple: |-
+          ### KOI Investigation — ${Inv.item_id} (${Inv.marketplace})
+          | Field | Value |
+          |---|---|
+          | Org risk | ${KoiInvestigation.org_risk_level} (${KoiInvestigation.org_risk_score}) |
+          | Status | ${KoiInvestigation.status} |
+          | Version investigated | ${KoiInvestigation.version} |
+          | Publisher / signed | ${KoiInvestigation.publisher} / ${KoiInvestigation.is_signed} |
+          | Org installs | ${KoiInvestigation.installs_count} |
+          | Endpoints affected | ${KoiInvestigation.endpoint_count} |
+          | Hostnames | ${KoiInvestigation.hostnames} |
+          | Affected users | ${KoiInvestigation.affected_users} |
+          | KOI findings | ${KoiInvestigation.findings_count} |
+          | On blocklist | ${KoiInvestigation.blocklisted_count} |
+          | On allowlist | ${KoiInvestigation.allowlisted_count} |
+          | Governed details | ${KoiInvestigation.governed_details} |
+
+          **Scope of this investigation (Marketplace KOI pack v1.2.3):** org-local risk only.
+          No catalog / vendor-wide risk, no AI risk summary, no remediation history and no
+          approval history are available - the commands that provided them do not exist in
+          this pack. An item that is not installed anywhere in the organization returns no
+          inventory record, so every field above comes back empty for it. **Empty is not low
+          risk** - it means "not seen in this organization", which for a freshly-appeared
+          item is the alerting condition itself.
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3770}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '23':
+    id: '23'
+    taskid: koixiv00-0000-4000-8000-000000000023
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000023
+      version: -1
+      name: Post investigation summary
+      description: Prints the investigation summary to the war room.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: ${KoiInvestigation.summary}
+    nexttasks:
+      '#none#':
+      - '24'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3940}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '24':
+    id: '24'
+    taskid: koixiv00-0000-4000-8000-000000000024
+    type: title
+    task:
+      id: koixiv00-0000-4000-8000-000000000024
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 4110}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 4220, "width": 780, "x": 250, "y": 50}}}'
+inputs:
+- key: item_id
+  value: {}
+  required: true
+  description: The KOI item ID (package / extension / MCP identifier).
+  playbookInputQuery: null
+- key: marketplace
+  value: {}
+  required: false
+  description: 'The item''s marketplace. Optional: it is only a filter on koi-inventory-list, and when omitted the endpoint lookup takes its marketplace from the inventory record. Supply it to disambiguate an item ID that exists in more than one marketplace. Note the alert observable can carry the literal "chrome", which the KOI API rejects - it expects "chrome_web_store".'
+  playbookInputQuery: null
+- key: version
+  value: {}
+  required: false
+  description: 'The item version to investigate. Optional: when omitted, the version on the org inventory record is used. Supply the alert''s version to investigate the version that triggered the alert rather than the version the organization runs.'
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty to use the single configured instance.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiInvestigation
+  description: The consolidated KOI investigation object.
+  type: unknown
+- contextPath: KoiInvestigation.org_risk_level
+  description: The organization's risk level for the item. Not catalog risk - there is no catalog risk in this pack.
+  type: string
+- contextPath: KoiInvestigation.org_risk_score
+  description: The organization's numeric risk for the item.
+  type: number
+- contextPath: KoiInvestigation.status
+  description: The item's status on the org inventory record.
+  type: string
+- contextPath: KoiInvestigation.version
+  description: The version the organization runs.
+  type: string
+- contextPath: KoiInvestigation.installs_count
+  description: Number of installs across the organization.
+  type: number
+- contextPath: KoiInvestigation.endpoint_count
+  description: Org-wide endpoint count from the inventory record.
+  type: number
+- contextPath: KoiInvestigation.is_signed
+  description: Whether the item is signed.
+  type: boolean
+- contextPath: KoiInvestigation.publisher
+  description: The item's publisher.
+  type: string
+- contextPath: KoiInvestigation.findings_count
+  description: Number of KOI findings on the org inventory record.
+  type: number
+- contextPath: KoiInvestigation.governed_details
+  description: KOI's governance detail for the item.
+  type: unknown
+- contextPath: KoiInvestigation.hostnames
+  description: Hostnames of endpoints carrying the item.
+  type: unknown
+- contextPath: KoiInvestigation.affected_users
+  description: Last logged-on users on the endpoints carrying the item.
+  type: unknown
+- contextPath: KoiInvestigation.blocklisted_count
+  description: Number of blocklist entries matching this item (non-zero means already blocked).
+  type: number
+- contextPath: KoiInvestigation.allowlisted_count
+  description: Number of allowlist entries matching this item (non-zero means explicitly allowed).
+  type: number
+- contextPath: KoiInvestigation.summary
+  description: Markdown investigation summary, including an explicit statement of what this pack cannot determine.
+  type: string
+- contextPath: Koi.Inventory
+  description: The organization's inventory record for the item.
+  type: unknown
+- contextPath: Koi.Inventory.Endpoint
+  description: Endpoints carrying the item.
+  type: unknown
+tags:
+- koi
+- koi-ext
+quiet: false

@@ -1,0 +1,725 @@
+id: KOI Ext - Enrich Item
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Enrich Item
+description: |-
+  Sub-playbook. Lightweight, reusable enrichment for a KOI item: the organization's
+  inventory record (risk level, numeric risk, version, marketplace) plus the endpoints
+  carrying the item, aggregated into a compact KoiEnrichment object and a markdown summary.
+
+  PACK: KOI Content Extension. Extends the Marketplace KOI pack v1.2.3 (13 commands,
+  integration only). Uses only commands that pack ships.
+
+  SUBSTITUTION vs the custom pack's "KOI - Enrich Item"
+    koi-koidex-risk-report            -> koi-inventory-list(item_id, marketplace, limit=1)
+    Koi.KoidexRiskReport.risk_level   -> Koi.Inventory.risk_level
+    Koi.KoidexRiskReport.risk         -> Koi.Inventory.risk
+  koi-inventory-list is used rather than koi-inventory-item-get because item-get requires
+  version, and version is exactly what this playbook does not reliably have up front.
+
+  ORDERING FIX (this was a latent bug in the original)
+  On the Marketplace pack koi-inventory-item-endpoints-list requires item_id AND marketplace
+  AND version - all three. The original fed version from an OPTIONAL playbook input, so the
+  call failed whenever the caller had no version. Here the inventory lookup runs FIRST and
+  version (and marketplace) fall back to Koi.Inventory.version / Koi.Inventory.marketplace
+  when the caller does not supply them. Supplying them still wins.
+
+  CAPABILITY DELTA - read this before trusting the numbers
+  - Risk is now ORG-LOCAL, not catalog/vendor risk. koi-koidex-risk-report queried the KOI
+    catalog for any item whether or not the org ran it. koi-inventory-list returns only the
+    organization's inventory record, so an item nobody in the org has installed produces NO
+    row: risk_level, risk_score, version and marketplace all come back empty. That is the
+    normal, expected outcome for a newly-appeared item - not an error.
+  - There is no AI risk summary and no Koidex compliance block anywhere in the 13 commands.
+  - Because version is resolved from the org record, an org running a different version than
+    the one that triggered an alert is enriched at the ORG's version. Pass the alert's
+    version explicitly if that distinction matters.
+
+  Both command tasks are continue-on-error by design: if the KOI API is unreachable the
+  playbook still returns whatever it could gather.
+
+  CONTEXT COLLISION WARNING: koi-inventory-list, koi-inventory-item-get and
+  koi-inventory-search all write the same 27 Koi.Inventory.* paths and overwrite each other.
+  Do not add a second inventory call to this playbook. koi-inventory-item-endpoints-list is
+  safe - it writes only Koi.Inventory.Endpoint.* and collides with nothing.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koixen00-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koixen00-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '1':
+    id: '1'
+    taskid: koixen00-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000001
+      version: -1
+      name: Get the org inventory record
+      description: 'Substitutes the custom pack''s koi-koidex-risk-report. Returns the organization''s inventory record for the item: risk, risk_level, version, marketplace, installs_count, endpoint_count, is_signed, publisher_name, status, findings, governed_details. Runs FIRST so version and marketplace are available to the endpoints call below. limit=1 keeps Koi.Inventory a single record so ${Koi.Inventory.version} resolves as a scalar.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${inputs.item_id}
+      marketplace:
+        simple: ${inputs.marketplace}
+      limit:
+        simple: '1'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '2'
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '2':
+    id: '2'
+    taskid: koixen00-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: koixen00-0000-4000-8000-000000000002
+      version: -1
+      name: Did the caller supply a version?
+      description: If the caller supplied a version, use it. Otherwise fall back to the version on the org inventory record. koi-inventory-item-endpoints-list requires version on this pack, so one of the two must resolve or the call cannot be made.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.version
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '4'
+      'yes':
+      - '3'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '3':
+    id: '3'
+    taskid: koixen00-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000003
+      version: -1
+      name: Use the supplied version
+      description: Coerces the caller-supplied version to a scalar.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.version
+      value:
+        complex:
+          root: inputs.version
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 250, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '4':
+    id: '4'
+    taskid: koixen00-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000004
+      version: -1
+      name: Use the org inventory version
+      description: Falls back to Koi.Inventory.version from the lookup above. If the item is not in the org's inventory this stays empty and the endpoints call below will fail its required-argument check - that is handled by continue-on-error and is the expected outcome for an item nobody has installed.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.version
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: version
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 650, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '5':
+    id: '5'
+    taskid: koixen00-0000-4000-8000-000000000005
+    type: condition
+    task:
+      id: koixen00-0000-4000-8000-000000000005
+      version: -1
+      name: Did the caller supply a marketplace?
+      description: marketplace is also a required argument on koi-inventory-item-endpoints-list. KOI Ext - Extract Alert Context cannot supply it on MCP alerts (item.marketplace is absent on all 18), so fall back to the value on the org inventory record.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.marketplace
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '7'
+      'yes':
+      - '6'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '6':
+    id: '6'
+    taskid: koixen00-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000006
+      version: -1
+      name: Use the supplied marketplace
+      description: Coerces the caller-supplied marketplace to a scalar.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.marketplace
+      value:
+        complex:
+          root: inputs.marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 250, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '7':
+    id: '7'
+    taskid: koixen00-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000007
+      version: -1
+      name: Use the org inventory marketplace
+      description: Falls back to Koi.Inventory.marketplace, which is always a value the KOI API accepts - unlike the alert observable, which carries the literal "chrome" where the API enum expects "chrome_web_store".
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.marketplace
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 650, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '8':
+    id: '8'
+    taskid: koixen00-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000008
+      version: -1
+      name: Get endpoints with the item installed
+      description: 'Retrieves the endpoints on which the item is installed. All three of item_id, marketplace and version are REQUIRED arguments on the Marketplace pack - this is why the inventory lookup runs first. Writes only Koi.Inventory.Endpoint.*, so it does not overwrite the inventory record read above.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-item-endpoints-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${inputs.item_id}
+      marketplace:
+        simple: ${Enr.marketplace}
+      version:
+        simple: ${Enr.version}
+      limit:
+        simple: '200'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '9'
+      '#none#':
+      - '9'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '9':
+    id: '9'
+    taskid: koixen00-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000009
+      version: -1
+      name: Aggregate endpoint exposure
+      description: Records the unique hostnames of endpoints carrying the item. Unchanged from the original - koi-inventory-item-endpoints-list keeps the same Koi.Inventory.Endpoint.* output shape on this pack.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.hostnames
+      value:
+        complex:
+          root: Koi.Inventory.Endpoint
+          accessor: hostname
+          transformers:
+          - operator: uniq
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '10'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1220}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '10':
+    id: '10'
+    taskid: koixen00-0000-4000-8000-000000000010
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000010
+      version: -1
+      name: Record endpoint count
+      description: Counts the endpoints returned by the endpoints call. Note this is the count actually returned (bounded by limit=200), not Koi.Inventory.endpoint_count, which is the org-wide aggregate on the inventory record.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.endpoint_count
+      value:
+        complex:
+          root: Koi.Inventory.Endpoint
+          accessor: id
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1390}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '11':
+    id: '11'
+    taskid: koixen00-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000011
+      version: -1
+      name: Record org risk level
+      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level. This is the ORGANIZATION''s risk level for the item, not the KOI catalog''s. Empty means the item is not in the org inventory, not that it is safe.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.risk_level
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk_level
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '12'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1560}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '12':
+    id: '12'
+    taskid: koixen00-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000012
+      version: -1
+      name: Record org risk score
+      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk -> Koi.Inventory.risk. Numeric risk on the org inventory record.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.risk_score
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: risk
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '13'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1730}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '13':
+    id: '13'
+    taskid: koixen00-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000013
+      version: -1
+      name: Record resolved version and marketplace
+      description: Publishes the version actually used for the endpoints lookup, so a caller can tell whether it came from the alert or from the org inventory record.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.version
+      value:
+        simple: ${Enr.version}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '14'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '14':
+    id: '14'
+    taskid: koixen00-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000014
+      version: -1
+      name: Record resolved marketplace
+      description: Publishes the marketplace actually used for the endpoints lookup.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.marketplace
+      value:
+        simple: ${Enr.marketplace}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '15'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2070}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '15':
+    id: '15'
+    taskid: koixen00-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000015
+      version: -1
+      name: Build enrichment summary
+      description: Markdown summary. Rewritten from the original - "Catalog risk level/score" became "Org risk level/score" because the underlying source changed from the KOI catalog to the org's own inventory record.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiEnrichment.summary
+      value:
+        simple: |-
+          ### KOI Item Enrichment
+          | Field | Value |
+          |---|---|
+          | Item | ${inputs.item_id} (${KoiEnrichment.marketplace}) |
+          | Version used | ${KoiEnrichment.version} |
+          | Org risk level | ${KoiEnrichment.risk_level} |
+          | Org risk score | ${KoiEnrichment.risk_score} |
+          | Installed on endpoints | ${KoiEnrichment.endpoint_count} |
+          | Hostnames | ${KoiEnrichment.hostnames} |
+
+          _Org-local risk only. There is no catalog / vendor-wide risk and no AI risk summary in the Marketplace KOI pack v1.2.3. Empty risk means the item is not in this organization's inventory - it does not mean the item is safe._
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2240}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '16':
+    id: '16'
+    taskid: koixen00-0000-4000-8000-000000000016
+    type: title
+    task:
+      id: koixen00-0000-4000-8000-000000000016
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2410}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 2520, "width": 780, "x": 250, "y": 50}}}'
+inputs:
+- key: item_id
+  value: {}
+  required: true
+  description: The KOI item ID (package / extension / MCP identifier).
+  playbookInputQuery: null
+- key: marketplace
+  value: {}
+  required: false
+  description: 'The item''s marketplace (npm, chrome_web_store, vscode, docker, ...). Optional here even though koi-inventory-item-endpoints-list requires it: when omitted, it is resolved from the org inventory record. Supply it when you know it - it narrows the inventory lookup.'
+  playbookInputQuery: null
+- key: version
+  value: {}
+  required: false
+  description: 'The item version. Optional: when omitted, the version on the org inventory record is used. Supply the alert''s version when you specifically want the version that triggered the alert rather than the version the org runs.'
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty to use the single configured instance.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiEnrichment.risk_level
+  description: The organization's risk level for the item (low/medium/high/critical/pending). Not catalog risk.
+  type: string
+- contextPath: KoiEnrichment.risk_score
+  description: The organization's numeric risk for the item.
+  type: number
+- contextPath: KoiEnrichment.endpoint_count
+  description: Number of endpoints returned as having the item installed.
+  type: number
+- contextPath: KoiEnrichment.hostnames
+  description: Hostnames of endpoints on which the item is installed.
+  type: unknown
+- contextPath: KoiEnrichment.version
+  description: The version actually used for the endpoints lookup.
+  type: string
+- contextPath: KoiEnrichment.marketplace
+  description: The marketplace actually used for the endpoints lookup.
+  type: string
+- contextPath: KoiEnrichment.summary
+  description: Markdown enrichment summary.
+  type: string
+- contextPath: Koi.Inventory
+  description: The organization's inventory record for the item.
+  type: unknown
+- contextPath: Koi.Inventory.Endpoint
+  description: Endpoints on which the item is installed.
+  type: unknown
+tags:
+- koi
+- koi-ext
+quiet: false

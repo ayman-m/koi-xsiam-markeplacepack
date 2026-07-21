@@ -1,0 +1,183 @@
+// KOI Content Extension — modeling rule.
+//
+// Pack:      KoiContentExtension ("KOI Content Extension") v1.0.0.
+// Targets:   the koi_koi_raw dataset produced by the OFFICIAL MARKETPLACE
+//            KOI pack v1.2.3 (integration id "KOI", 13 commands).
+//            This pack ships NO integration of its own.
+//
+// DEPENDENCY: the Alerts block below reads columns that only exist because
+// the sibling KoiContentExtension PARSING rule promoted them at ingest
+// (item_*, device_*, mcp_*, finding_*, alert_type). Without that parsing rule
+// 16 of the Alerts mappings silently resolve to null — including event.id,
+// alert.name, the whole host block and the whole resource block. The two
+// rules MUST be deployed together. The Audit block, by contrast, reads only
+// raw fields and is fully standalone.
+//
+// Structure: one MODEL header per dataset, with per-source_log_type
+// filter | alter chains underneath (the Okta reference pattern).
+//
+// Mapping decisions that are deliberate and should survive future edits:
+//   * xdm.alert.category is enumerated (XDM_CONST.THREAT_CATEGORY). The Koi
+//     OCSF class_name ("Application Security Posture Finding") is free text,
+//     so it goes to xdm.alert.subcategory, NOT category. Leaving category
+//     unset is correct until a real enum mapping exists.
+//   * xdm.alert.severity is a String (there is no XDM_CONST.SEVERITY_*). Koi
+//     already emits the canonical ladder (Informational/Low/Medium/High/
+//     Critical), so a to_string() passthrough is enough.
+//   * marketplace / item_marketplace -> xdm.target.resource.sub_type on BOTH
+//     blocks. npm / chrome / vscode are software ecosystems, NOT operating
+//     systems, so they must never reach os_family.
+//
+// Live-validated 21 July 2026 against 314 Alerts and ~20,215 Audit rows
+// (90 days, tenant api-ayman.xdr.eu).
+[MODEL: dataset=koi_koi_raw]
+filter source_log_type = "Alerts"
+| alter
+    // ── identity ──────────────────────────────────────────────────────
+    // xdm.event.id = _id, NOT koi_event_id.
+    // _id is an XSIAM-internal column, present and DISTINCT on 314/314 alert
+    // rows. koi_event_id (observables[event.id]) is populated 314/314 but has
+    // only 18 DISTINCT VALUES across those 314 rows — it is a per-scan-batch
+    // UUID, so ~17.4 alerts collide on each one. Using it as the XDM event
+    // identity would silently merge unrelated alerts. It is still promoted by
+    // the parsing rule as a BATCH CORRELATOR and remains queryable as a raw
+    // dataset column; it deliberately has no XDM home.
+    xdm.event.id                = _id,
+    // NOTE: alert_type has exactly ONE distinct value in 90 days of live data
+    // ("policy_violation"), so xdm.event.type is effectively constant here.
+    xdm.event.type              = alert_type,
+    xdm.alert.original_alert_id = finding_uid,
+    xdm.alert.name              = finding_title,
+    xdm.alert.description       = message,
+    xdm.alert.severity          = to_string(severity),
+    xdm.alert.subcategory       = class_name,
+    // Degenerates to ["policy_violation", <risk_level>] on current data —
+    // see the alert_type note above.
+    xdm.alert.risks             = arraycreate(alert_type, risk_level),
+    // ── target host (the device the item is installed on) ──────────────
+    xdm.target.host.device_id   = device_id,
+    xdm.target.host.hostname    = alert_hostname,
+    xdm.target.host.fqdn        = alert_hostname,
+    xdm.target.host.os          = device_os_obs,
+    // Live-confirmed: linux 140 / mac 104 / windows 70 = 314/314, zero
+    // fall-through to the null default. The literal for macOS is exactly
+    // "mac". Do not "tidy" these branches.
+    xdm.target.host.os_family   = if(device_os_obs = "windows", XDM_CONST.OS_FAMILY_WINDOWS,
+                                     device_os_obs = "mac",     XDM_CONST.OS_FAMILY_MACOS,
+                                     device_os_obs = "linux",   XDM_CONST.OS_FAMILY_LINUX,
+                                     to_string(null)),
+    // ── user (last logged-on user on that device) ──────────────────────
+    xdm.source.user.username    = device_last_user,
+    // ── target resource (the flagged item / MCP server) ────────────────
+    // id: item_id, plain. The custom pack used
+    //     coalesce(item_id, to_string(mcp_id)); that fallback is DEAD CODE —
+    //     item_id is non-null 314/314 including all 18 MCP rows, so it never
+    //     fires and mcp_id never reached XDM anyway. mcp_id stays available
+    //     as a promoted dataset column.
+    // name: item_id, plain. The custom pack used
+    //     coalesce(mcp_package_name, item_id); also dead — mcp_package_name
+    //     equals item_id on 18/18 MCP rows, so the coalesce never changed the
+    //     result. Stated plainly rather than dressed up as a preference.
+    xdm.target.resource.id      = item_id,
+    xdm.target.resource.name    = item_id,
+    // extension (296) | mcp_server (18)
+    xdm.target.resource.type    = item_type,
+    // sub_type = the software ECOSYSTEM (npm 293, chrome 3; 296/314). This
+    // replaces the custom pack's mcp_type (local|remote), which is a network
+    // locality, not a sub-type of the resource, and which was inconsistent
+    // with the Audit block's marketplace -> sub_type mapping. mcp_type is
+    // still promoted by the parsing rule and queryable on the raw dataset.
+    // Null on the 18 MCP alerts: they carry no item.marketplace observable.
+    xdm.target.resource.sub_type = item_marketplace,
+    // ── observer (Koi as the detecting product) ────────────────────────
+    xdm.observer.vendor         = _vendor,
+    xdm.observer.product        = _product,
+    // ── tenant (which KOI customer this event belongs to) ──────────────
+    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id),
+    xdm.observer.unique_identifier = koi_customer_id;
+
+// ── Audit block ────────────────────────────────────────────────────────
+// Koi audit events are FLAT (no observables/resources). This block consumes
+// ZERO parsing-rule output; it reads raw columns only. Mapping mirrors the
+// AWS-CloudTrail / Monday audit->XDM patterns:
+//   * event.operation          — normalised CRUD enum from `action`.
+//   * event.operation_sub_type — the raw verb, kept verbatim.
+//   * event.original_event_type— the raw vendor `type` (extensions/devices/…).
+//   * source.user.user_type    — SERVICE_ACCOUNT for the "Koi" system actor.
+//   * target.resource.*        — the object acted on (item/policy/guardrail).
+//   * target.host.*            — the managed device (85% of rows carry one).
+filter source_log_type = "Audit"
+| alter
+    // _id is present and distinct 20,215/20,215. (Koi also emits its own `id`
+    // UUID, equally complete; _id is used here for consistency with the
+    // Alerts block.)
+    xdm.event.id                  = _id,
+    xdm.event.type                = action,
+    xdm.event.original_event_type = type,
+    xdm.event.operation_sub_type  = action,
+    xdm.event.description         = message,
+    // Operation coverage was 17,233/20,215 (85.3%) with the custom pack's
+    // chain; the four branches marked ADDED close 2,974 of the 2,982 null
+    // rows, taking it to 20,207/20,215 (99.96%).
+    //   archived               2,969 rows — the 4th-largest action overall.
+    //   unarchived                 2 rows.
+    //   email_sent                 2 rows.
+    //   allowlist_items_added      1 row.
+    // JUDGEMENT CALL: `archived` -> DELETE. Koi archiving is a soft delete of
+    // a device record (the device stops being managed and disappears from
+    // inventory views), and `unarchived` exists as the inverse. If your
+    // convention treats archive as a state change rather than a removal,
+    // switch it to OPERATION_TYPE_UPDATE — it is 2,969 rows either way, so
+    // decide deliberately rather than inheriting this.
+    // Still null after this chain: the 8 approval_requests rows, where the
+    // raw `action` column itself is NULL. Nothing to map there.
+    xdm.event.operation = if(
+        action = "created",      XDM_CONST.OPERATION_TYPE_CREATE,
+        action = "installed",    XDM_CONST.OPERATION_TYPE_CREATE,
+        action = "email_sent",   XDM_CONST.OPERATION_TYPE_CREATE,              // ADDED
+        action = "updated",      XDM_CONST.OPERATION_TYPE_UPDATE,
+        action = "enabled",      XDM_CONST.OPERATION_TYPE_UPDATE,
+        action = "disabled",     XDM_CONST.OPERATION_TYPE_UPDATE,
+        action = "unarchived",   XDM_CONST.OPERATION_TYPE_UPDATE,              // ADDED
+        action = "allowlist_items_added", XDM_CONST.OPERATION_TYPE_UPDATE,     // ADDED
+        action = "uninstalled",  XDM_CONST.OPERATION_TYPE_DELETE,
+        action = "archived",     XDM_CONST.OPERATION_TYPE_DELETE,              // ADDED
+        action ~= "(?i)remediation.*", XDM_CONST.OPERATION_TYPE_EXECUTION,
+        to_string(null)),
+    // No explicit success/fail flag in Koi audit; default SUCCESS, but keep
+    // the failure regex so a future failure verb is caught automatically.
+    // Live: resolves SUCCESS on 20,215/20,215 — the regex never matches
+    // because no failure action exists in this data. Unvalidatable here.
+    xdm.event.outcome = if(action ~= "(?i).*(failed|error|deny|denied|reject).*",
+                          XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_SUCCESS),
+    // Actor (initiator).
+    xdm.source.user.username  = triggered_by,
+    // Keyed on triggered_by ALONE, not on category.
+    // The custom pack used: if(category = "user" and triggered_by != "Koi",
+    // REGULAR, SERVICE_ACCOUNT). That misclassified 22 rows which carry
+    // category="system" but a real @paloaltonetworks.com address in
+    // triggered_by (aarias@ 9, jegarcia@ 4, ydujardin@ 3, …) as
+    // SERVICE_ACCOUNT. `category` describes the audit CHANNEL, not the actor.
+    // Verified this change is safe for the large cohort: the 2,968 rows with
+    // category="user" AND triggered_by="Koi" (the bulk `archived` device
+    // events) still land as SERVICE_ACCOUNT here, because the test is now
+    // exactly triggered_by = "Koi".
+    xdm.source.user.user_type = if(triggered_by = "Koi",
+                                   XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+                                   XDM_CONST.USER_TYPE_REGULAR),
+    // Target object acted upon.
+    xdm.target.resource.id       = object_id,
+    xdm.target.resource.name     = object_name,
+    xdm.target.resource.type     = object_type,
+    // Ecosystem (software_windows / software_mac / built_in / npm / …),
+    // 13,893/20,215. Same field as the Alerts block's item_marketplace.
+    xdm.target.resource.sub_type = marketplace,
+    // Managed device (present on item events; null for policy/guardrail).
+    xdm.target.host.hostname  = hostname,
+    // Observer — Koi as the auditing product.
+    xdm.observer.vendor  = _vendor,
+    xdm.observer.product = _product,
+    // Tenant — 20,086/20,215 carry these; 129 rows have neither, so
+    // xdm.observer.name is null there.
+    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id),
+    xdm.observer.unique_identifier = koi_customer_id;
