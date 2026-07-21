@@ -542,6 +542,29 @@ process is irrelevant.**
 > an already-inventoried item is a no-op. **Any detection test must use an item verified absent
 > from the host beforehand.**
 
+### 7d.2b The full install → uninstall lifecycle is detected **[LIVE]**
+
+Removing the three test artefacts and re-scanning produced matching `uninstalled` events at
+10:05:45, roughly four minutes after the scan completed:
+
+| Item | `installed` | `uninstalled` | Version on both |
+|---|---|---|---|
+| `inflection` (pypi) | 09:55:12 | 10:05:45 | `0.5.1` |
+| `tabulate` (pypi) | 06:06:06 | 10:05:45 | `0.9.0` |
+| `octocat/Hello-World` (github/git) | 09:48:06 | 10:05:45 | `7fd1a60b…` (identical SHA) |
+
+Two things worth noting for content design:
+
+- **Item identity and version are stable across the lifecycle.** The uninstall carries the same
+  `object_name` and `item_version` as the install — including the git commit SHA — so install and
+  removal of the same artefact can be correlated on `(object_name, item_version)`.
+- **`tabulate` produced exactly ONE uninstall event** although it was removed from *both* the user
+  and SYSTEM site-packages directories. Consistent with §7d.2: KOI only ever tracked the
+  user-profile copy, so only that removal was a state change.
+
+End-to-end timing across all runs in this session: scan completes → events queryable in
+`koi_koi_raw` in roughly **4–10 minutes**.
+
 ### 7d.2a Git repositories are a discovered surface **[LIVE]**
 
 A `git clone` into a user profile is inventoried as a first-class item:
