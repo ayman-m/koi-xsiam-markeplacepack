@@ -96,11 +96,18 @@ description: |-
        path is appended to, the last element is this playbook's own lookup.
     3. The blocklist read is inside the item branch, so KoiTriage.blocklisted_item is only ever
        evaluated when an item_id exists.
-    4. marketplace: the alert observable carries "chrome" on 3 of 314 rows while the API's
-       vocabulary is "chrome_web_store", and MCP alerts carry no marketplace at all. The
-       inventory lookup's own Koi.Inventory.marketplace is preferred over the alert's value
-       when available, and KOI Ext - Block and Remediate re-resolves it by item_id if it is
-       still empty.
+    4. marketplace: the vocabulary a KOI event uses is NOT the vocabulary the KOI API accepts
+       (VERIFIED_FACTS 7c) - events say software_windows / chrome / vsc where the API wants
+       windows / chrome_web_store / vscode, and only npm and pypi are spelled the same in
+       both. This playbook never touches a raw event value: KOI Ext - Extract Alert Context
+       does the mapping and publishes the API-safe KoiContext.marketplace (plus
+       KoiContext.marketplace_raw for the record). KoiTriage.marketplace is seeded from the
+       MAPPED value, then overwritten by Koi.Inventory.marketplace when the inventory lookup
+       returned one - that is a COMMAND output, already API-canonical, and is used as-is
+       rather than re-mapped. Both are therefore safe to pass to the sub-playbooks. An empty
+       marketplace is expected (all 18 MCP alerts, and any event value with no API equivalent:
+       ollama, built_in, side_loaded); KOI Ext - Block and Remediate re-resolves it by item_id
+       and skips the write if it still cannot.
 starttaskid: '0'
 tasks:
   '0':
@@ -198,7 +205,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000003
       version: -1
       name: Look the item up in the org inventory
-      description: 'Substitutes koi-koidex-risk-report, which does not exist in the Marketplace pack. Returns the ORGANIZATION''s record for the item: risk_level, risk score, publisher, signing, install and endpoint counts, and the API-canonical marketplace value.'
+      description: 'Substitutes koi-koidex-risk-report, which does not exist in the Marketplace pack. Returns the ORGANIZATION''s record for the item: risk_level, risk score, publisher, signing, install and endpoint counts, and the API-canonical marketplace value. The marketplace argument is fed from KoiContext.marketplace, the value KOI Ext - Extract Alert Context has already mapped onto the API vocabulary; passing the raw event value would return HTTP 400 and lose signal C of the verdict matrix. It is only a filter here, so an empty value simply widens the lookup. Continue-on-error: a failed lookup leaves C empty and the verdict falls back to A, B and D.'
       iscommand: true
       brand: ''
       script: '|||koi-inventory-list'
@@ -326,7 +333,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000006
       version: -1
       name: Seed marketplace from the alert
-      description: Baseline value, overwritten in the next task when the inventory lookup returned an authoritative one.
+      description: 'Baseline value, overwritten in the next task when the inventory lookup returned an authoritative one. Reads KoiContext.marketplace, which KOI Ext - Extract Alert Context has ALREADY mapped from the event vocabulary onto the API vocabulary - never KoiContext.marketplace_raw, which would 400. Empty here is normal and recoverable.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -359,7 +366,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000007
       version: -1
       name: Prefer the inventory marketplace
-      description: Uses Set (not SetAndHandleEmpty) on purpose - Set does nothing when the value is empty, so the alert-derived baseline survives when the item is not in inventory. The API vocabulary is authoritative; the alert can carry "chrome" where the API expects "chrome_web_store".
+      description: 'Uses Set (not SetAndHandleEmpty) on purpose - Set does nothing when the value is empty, so the alert-derived baseline survives when the item is not in inventory. Koi.Inventory.marketplace is a COMMAND output: it is already in the API vocabulary and is deliberately NOT re-mapped - allow-listing a command output against a static table would silently drop a marketplace KOI adds to the API later. It is preferred over the alert-derived value because it is the organization''s own record.'
       iscommand: false
       brand: ''
       script: Set
@@ -806,6 +813,8 @@ tasks:
 
           | Item | ${KoiContext.item_id} (${KoiTriage.marketplace}) |
 
+          | Marketplace as the event wrote it | ${KoiContext.marketplace_raw} (mapped to "${KoiTriage.marketplace}" - the KOI event and KOI API vocabularies differ) |
+
           | Item version | ${KoiContext.item_version} |
 
           | Device | ${KoiContext.alert_hostname} (${KoiContext.device_id}) |
@@ -1096,7 +1105,7 @@ outputs:
   description: The organization's numeric inventory risk score for the alerted item, captured alongside signal C.
   type: number
 - contextPath: KoiTriage.marketplace
-  description: The resolved marketplace for the alerted item, preferring the inventory record over the alert payload.
+  description: The resolved marketplace for the alerted item, in the KOI API vocabulary. Prefers the inventory record (a command output, already canonical) over the alert payload (mapped from the event vocabulary by KOI Ext - Extract Alert Context). Safe to pass to any KOI command; may legitimately be empty.
   type: string
 - contextPath: KoiTriage.blocklisted_item
   description: The alerted item_id when it is already on the org blocklist, otherwise empty (signal D).

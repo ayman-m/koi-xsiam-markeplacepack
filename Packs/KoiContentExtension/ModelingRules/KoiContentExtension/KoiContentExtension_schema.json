@@ -23,6 +23,19 @@
         "hostname": {"type": "string", "is_array": false},
 
         "koi_tenant_name": {"type": "string", "is_array": false},
-        "koi_customer_id": {"type": "string", "is_array": false}
+        "koi_customer_id": {"type": "string", "is_array": false},
+
+        "alert_type": {"type": "string", "is_array": false},
+        "finding_uid": {"type": "string", "is_array": false},
+        "finding_title": {"type": "string", "is_array": false},
+        "device_id": {"type": "string", "is_array": false},
+        "alert_hostname": {"type": "string", "is_array": false},
+        "device_os_obs": {"type": "string", "is_array": false},
+        "device_last_user": {"type": "string", "is_array": false},
+        "item_id": {"type": "string", "is_array": false},
+        "item_type": {"type": "string", "is_array": false},
+        "item_marketplace": {"type": "string", "is_array": false},
+        "item_marketplace_api": {"type": "string", "is_array": false},
+        "marketplace_api": {"type": "string", "is_array": false}
     }
 }

@@ -24,12 +24,20 @@
 //   * xdm.alert.severity is a String (there is no XDM_CONST.SEVERITY_*). Koi
 //     already emits the canonical ladder (Informational/Low/Medium/High/
 //     Critical), so a to_string() passthrough is enough.
-//   * marketplace / item_marketplace -> xdm.target.resource.sub_type on BOTH
-//     blocks. npm / chrome / vscode are software ecosystems, NOT operating
-//     systems, so they must never reach os_family.
+//   * marketplace_api / item_marketplace_api -> xdm.target.resource.sub_type on
+//     BOTH blocks — the API vocabulary, never the raw short event form. npm /
+//     chrome_web_store / vscode are software ecosystems, NOT operating systems,
+//     so they must never reach os_family. (Both _api columns are produced by the
+//     sibling parsing rule; see the DEPENDENCY note above.)
+//   * xdm.observer.name / .unique_identifier fall back to _collector_name
+//     because Koi stopped emitting koi_tenant_name / koi_customer_id — see the
+//     dated regression note in the Alerts block.
 //
 // Live-validated 21 July 2026 against 314 Alerts and ~20,215 Audit rows
-// (90 days, tenant api-ayman.xdr.eu).
+// (90 days, tenant api-ayman.xdr.eu). The marketplace and observer changes made
+// later the same day were re-measured on a fresher 90-day window (430 Alerts /
+// 20,170 Audit) — where the two disagree, the larger number is simply the later
+// reading of a growing dataset, not a contradiction.
 [MODEL: dataset=koi_koi_raw]
 filter source_log_type = "Alerts"
 | alter
@@ -82,19 +90,73 @@ filter source_log_type = "Alerts"
     xdm.target.resource.name    = item_id,
     // extension (296) | mcp_server (18)
     xdm.target.resource.type    = item_type,
-    // sub_type = the software ECOSYSTEM (npm 293, chrome 3; 296/314). This
-    // replaces the custom pack's mcp_type (local|remote), which is a network
-    // locality, not a sub-type of the resource, and which was inconsistent
-    // with the Audit block's marketplace -> sub_type mapping. mcp_type is
-    // still promoted by the parsing rule and queryable on the raw dataset.
-    // Null on the 18 MCP alerts: they carry no item.marketplace observable.
-    xdm.target.resource.sub_type = item_marketplace,
+    // sub_type = the software ECOSYSTEM. This replaces the custom pack's
+    // mcp_type (local|remote), which is a network locality, not a sub-type of
+    // the resource, and which was inconsistent with the Audit block's
+    // marketplace -> sub_type mapping. mcp_type is still promoted by the
+    // parsing rule and queryable on the raw dataset.
+    //
+    // CHANGED 21 July 2026: item_marketplace_api, NOT item_marketplace.
+    // The raw event value is a SHORT display form (chrome, vsc, software_windows)
+    // that the Koi API rejects with HTTP 400; item_marketplace_api is the same
+    // fact in the API's own vocabulary (chrome_web_store, vscode, windows) —
+    // see the mapping and its evidence in the sibling parsing rule.
+    // sub_type is a cross-source normalised field: it must carry ONE stable
+    // vocabulary, and the API's is the one that is documented, enumerated in
+    // Koi.yml, and directly usable as a command argument. A dashboard that wants
+    // the display form still has item_marketplace on the raw dataset.
+    // Coverage is UNCHANGED by this switch: on live data item_marketplace_api is
+    // non-null on exactly the same 296 alert rows as item_marketplace
+    // (npm 293 -> npm, chrome 3 -> chrome_web_store), null on the 18 MCP alerts,
+    // which carry no item.marketplace observable. Nothing is lost today.
+    // If an unmappable value (built_in / side_loaded / ollama) ever reaches an
+    // alert, sub_type is deliberately NULL rather than a value that is not in the
+    // vocabulary the field claims to hold.
+    xdm.target.resource.sub_type = item_marketplace_api,
     // ── observer (Koi as the detecting product) ────────────────────────
     xdm.observer.vendor         = _vendor,
     xdm.observer.product        = _product,
     // ── tenant (which KOI customer this event belongs to) ──────────────
-    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id),
-    xdm.observer.unique_identifier = koi_customer_id;
+    // ⚠️ REGRESSION, 21 July 2026 — RE-CHECK THIS. Koi has stopped emitting
+    // koi_tenant_name and koi_customer_id. Measured on this dataset today:
+    //   Alerts, last 90 days : 430 rows, 314 carry both fields.
+    //   Alerts, last 24 hours: 116 rows,   0 carry either field.
+    //   (Audit, same check   : 20,170 / 19,984 and 186 / 0. Same story.)
+    // The 116 and the 186 are the SAME rows in both cuts — i.e. every row
+    // missing the fields was ingested in the last 24 hours and every older row
+    // has them, so the cut-over is sharp, not a gradual drop-off. Pack-wide the
+    // brief records 20,324 of 20,522 historical rows populated against 0 recent.
+    //
+    // The mapping is NOT deleted: the historical rows depend on it and the
+    // Koi-side change may be transient. A third argument is appended instead.
+    //
+    // FALLBACK = _collector_name, the XSIAM event-collector (integration
+    // instance) name. Chosen on evidence, not convenience:
+    //   * populated 430/430 alert rows and 20,170/20,170 audit rows over 90 days
+    //     and 302/302 rows in the last 24 hours — 100%, both blocks, both eras;
+    //   * it PRESERVES THE PARTITION the lost field carried. One instance holds
+    //     one Koi API key, so one instance = one Koi tenant. Live values line up
+    //     one-for-one and even share the string: koi_tenant_name "plts" <->
+    //     _collector_name "KOI_PLTS" (18,413 rows), "paet" <-> "KOI_PAET"
+    //     (1,885 rows). Nothing else on the row does this — VERIFIED_FACTS §2
+    //     notes the pack ships no field identifying the producing instance;
+    //     _collector_name is that field, supplied by XSIAM rather than by Koi.
+    //   * _vendor / _product were REJECTED as the fallback. They are also 100%
+    //     populated but constant ("koi" / "koi"), so they would fill the field
+    //     with a value that distinguishes nothing — cosmetically non-null,
+    //     operationally useless. They are already mapped, correctly, to
+    //     xdm.observer.vendor / .product just above.
+    // Cost of the fallback, stated plainly: on recent rows xdm.observer.name
+    // changes case and prefix ("KOI_PLTS" not "plts"), so a query grouping over
+    // a window that spans the cut-over sees two labels for one tenant. That is
+    // strictly better than one label and a null, and it is visible rather than
+    // silent — which is the point.
+    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id, _collector_name),
+    // Same fallback. unique_identifier is only required to be stable and unique
+    // per observer; the collector name is both, within this XSIAM tenant. On
+    // recent rows name and unique_identifier therefore coincide — honest, since
+    // the Koi customer id is genuinely unknown for those rows.
+    xdm.observer.unique_identifier = coalesce(koi_customer_id, _collector_name);
 
 // ── Audit block ────────────────────────────────────────────────────────
 // Koi audit events are FLAT (no observables/resources). This block consumes
@@ -169,15 +231,37 @@ filter source_log_type = "Audit"
     xdm.target.resource.id       = object_id,
     xdm.target.resource.name     = object_name,
     xdm.target.resource.type     = object_type,
-    // Ecosystem (software_windows / software_mac / built_in / npm / …),
-    // 13,893/20,215. Same field as the Alerts block's item_marketplace.
-    xdm.target.resource.sub_type = marketplace,
+    // Ecosystem. CHANGED 21 July 2026 alongside the Alerts block: marketplace_api,
+    // not marketplace, so that ONE XDM field does not carry TWO vocabularies.
+    // Leaving this as the raw `marketplace` while the Alerts block emits the API
+    // form would put "chrome" and "chrome_web_store" into the same field for the
+    // same ecosystem — the exact confusion this pack exists to remove.
+    // Live effect, measured on 20,170 audit rows over 90 days (21 July 2026):
+    //   populated 13,849 -> 13,015. The 834-row difference is deliberate and is
+    //   entirely built_in (828), ollama (5) and side_loaded (1). built_in and
+    //   side_loaded are installation_method values leaking into the marketplace
+    //   field, and ollama is not in the API's marketplace list at all; none of
+    //   the three is a software ecosystem, so none belongs in this field.
+    //   7,136 rows (52% of the populated ones) CHANGE value — software_windows
+    //   -> windows 5,294, chrome -> chrome_web_store 891, software_mac -> mac 617,
+    //   vsc -> vscode 175, github -> github_mcp_registry 65, edge -> edge_add_ons
+    //   48, firefox -> firefox_add_ons 19, npp -> notepad++ 12, openvsx ->
+    //   open_vsx_registry 10, jet -> jetbrains 5. pypi/npm/homebrew/chocolatey/
+    //   cursor/docker/claude_desktop_extensions are spelled the same and do not move.
+    // The verbatim event value remains queryable as the raw `marketplace` column.
+    xdm.target.resource.sub_type = marketplace_api,
     // Managed device (present on item events; null for policy/guardrail).
     xdm.target.host.hostname  = hostname,
     // Observer — Koi as the auditing product.
     xdm.observer.vendor  = _vendor,
     xdm.observer.product = _product,
-    // Tenant — 20,086/20,215 carry these; 129 rows have neither, so
-    // xdm.observer.name is null there.
-    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id),
-    xdm.observer.unique_identifier = koi_customer_id;
+    // Tenant. ⚠️ Same regression as the Alerts block — full rationale and the
+    // reason for choosing _collector_name over _vendor/_product is documented
+    // there; do not change one block without the other.
+    // Audit-side numbers, measured 21 July 2026:
+    //   last 90 days : 20,170 rows, 19,984 carry koi_tenant_name/koi_customer_id.
+    //   last 24 hours:    186 rows,      0 carry either.
+    //   _collector_name  : 20,170/20,170 and 186/186 — 100% in both windows.
+    // The 186 rows missing the Koi fields are exactly the last-24-hour rows.
+    xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id, _collector_name),
+    xdm.observer.unique_identifier = coalesce(koi_customer_id, _collector_name);

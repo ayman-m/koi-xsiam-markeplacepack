@@ -35,8 +35,21 @@ description: |-
     the one that triggered an alert is enriched at the ORG's version. Pass the alert's
     version explicitly if that distinction matters.
 
+  MARKETPLACE VOCABULARY MAPPING - WHY TASKS 17-20 EXIST (VERIFIED_FACTS 7c)
+  The marketplace value a KOI event carries is NOT the value the KOI API accepts: events use
+  short forms (software_windows, chrome, vsc, ...) while the API and this pack's YAML
+  predefined lists use long forms (windows, chrome_web_store, vscode, ...). Only npm and pypi
+  are spelled the same in both, so an unmapped event value returns HTTP 400 from
+  koi-inventory-item-endpoints-list. The marketplace INPUT is therefore run through a static
+  map before use. The map carries the 22 API values as identity rows, so it is idempotent and
+  a caller already supplying an API value is unaffected. Koi.Inventory.marketplace is a
+  COMMAND output, is already API-canonical, and is never re-mapped. An unrecognised value
+  becomes EMPTY and routes to the inventory fallback.
+
   Both command tasks are continue-on-error by design: if the KOI API is unreachable the
-  playbook still returns whatever it could gather.
+  playbook still returns whatever it could gather. The endpoints call is additionally gated on
+  version AND marketplace both being known - an unknown (item_id, marketplace, version) triple
+  returns HTTP 404, not an empty 200 (VERIFIED_FACTS 7b), so it is skipped rather than failed.
 
   CONTEXT COLLISION WARNING: koi-inventory-list, koi-inventory-item-get and
   koi-inventory-search all write the same 27 Koi.Inventory.* paths and overwrite each other.
@@ -57,7 +70,7 @@ tasks:
       type: start
     nexttasks:
       '#none#':
-      - '1'
+      - '17'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 450, "y": 50}}'
@@ -85,7 +98,7 @@ tasks:
       item_id:
         simple: ${inputs.item_id}
       marketplace:
-        simple: ${inputs.marketplace}
+        simple: ${Enr.marketplace_in}
       limit:
         simple: '1'
       using:
@@ -231,8 +244,8 @@ tasks:
     task:
       id: koixen00-0000-4000-8000-000000000005
       version: -1
-      name: Did the caller supply a marketplace?
-      description: marketplace is also a required argument on koi-inventory-item-endpoints-list. KOI Ext - Extract Alert Context cannot supply it on MCP alerts (item.marketplace is absent on all 18), so fall back to the value on the org inventory record.
+      name: Is a usable marketplace known?
+      description: 'Tests the MAPPED value (Enr.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a required argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 18 MCP alerts), or the value supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to Koi.Inventory.marketplace, a COMMAND output that is already API-canonical and is used as-is.'
       iscommand: false
       brand: ''
       type: condition
@@ -242,7 +255,7 @@ tasks:
       - - left:
             iscontext: true
             value:
-              simple: inputs.marketplace
+              simple: Enr.marketplace_in
           operator: isNotEmpty
           right:
             value: {}
@@ -269,7 +282,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000006
       version: -1
       name: Use the supplied marketplace
-      description: Coerces the caller-supplied marketplace to a scalar.
+      description: Uses the caller-supplied marketplace after vocabulary mapping. Already a scalar - it was coerced in task 17 and mapped in task 20.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -278,19 +291,12 @@ tasks:
       key:
         simple: Enr.marketplace
       value:
-        complex:
-          root: inputs.marketplace
-          transformers:
-          - operator: join
-            args:
-              separator:
-                value:
-                  simple: ''
+        simple: ${Enr.marketplace_in}
       append:
         simple: 'false'
     nexttasks:
       '#none#':
-      - '8'
+      - '21'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 250, "y": 880}}'
@@ -309,7 +315,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000007
       version: -1
       name: Use the org inventory marketplace
-      description: Falls back to Koi.Inventory.marketplace, which is always a value the KOI API accepts - unlike the alert observable, which carries the literal "chrome" where the API enum expects "chrome_web_store".
+      description: 'Falls back to Koi.Inventory.marketplace. This is a COMMAND output: it is already in the API vocabulary and is deliberately NOT passed through the map - allow-listing a command output against a static table would silently drop a marketplace KOI adds to the API later.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -331,7 +337,7 @@ tasks:
         simple: 'false'
     nexttasks:
       '#none#':
-      - '8'
+      - '21'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 650, "y": 880}}'
@@ -669,6 +675,217 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
+  '17':
+    id: '17'
+    taskid: koixen00-0000-4000-8000-000000000017
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000017
+      version: -1
+      name: Coerce marketplace to scalar (verbatim)
+      description: 'Coerces the caller-supplied marketplace to a scalar and keeps it VERBATIM, before any vocabulary mapping. Playbook inputs arrive as 1-element arrays when fed from another playbook output; joining with an empty separator collapses them. May legitimately be empty - marketplace is only a filter on koi-inventory-list, and KOI Ext - Extract Alert Context cannot supply one on MCP alerts.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.marketplace_raw
+      value:
+        complex:
+          root: inputs.marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '18'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '18':
+    id: '18'
+    taskid: koixen00-0000-4000-8000-000000000018
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000018
+      version: -1
+      name: Load the marketplace vocabulary map
+      description: 'Loads the KOI marketplace vocabulary map as a JSON string. VERIFIED_FACTS 7c: the marketplace values carried in koi_koi_raw events are SHORT forms (software_windows, chrome, vsc, ...) while the KOI API and the pack YAML predefined lists use LONG forms (windows, chrome_web_store, vscode, ...). Passing an event value to a command unchanged returns HTTP 400. Each row is {src -> api}. The 22 API values are also present as identity rows, so the mapping is IDEMPOTENT and a value that is already in API form survives it unchanged - re-mapping an already-mapped value is safe. ollama, built_in and side_loaded are deliberately ABSENT: ollama has no API equivalent, and built_in / side_loaded are installation_method values leaking into the marketplace field. A value with no row maps to EMPTY, which downstream playbooks recover from with a koi-inventory-list lookup by item_id; a wrong value is an unrecoverable 400. KEEP THIS TABLE IDENTICAL IN ALL FOUR PLAYBOOKS THAT CARRY IT (Extract Alert Context, Investigate Item, Enrich Item, Block and Remediate).'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiMarketplaceMapRaw
+      value:
+        simple: '[{"src":"software_windows","api":"windows"},{"src":"software_mac","api":"mac"},{"src":"vsc","api":"vscode"},{"src":"jet","api":"jetbrains"},{"src":"npp","api":"notepad++"},{"src":"openvsx","api":"open_vsx_registry"},{"src":"chrome","api":"chrome_web_store"},{"src":"edge","api":"edge_add_ons"},{"src":"firefox","api":"firefox_add_ons"},{"src":"github","api":"github_mcp_registry"},{"src":"npm","api":"npm"},{"src":"pypi","api":"pypi"},{"src":"homebrew","api":"homebrew"},{"src":"chocolatey","api":"chocolatey"},{"src":"cursor","api":"cursor"},{"src":"docker","api":"docker"},{"src":"claude_desktop_extensions","api":"claude_desktop_extensions"},{"src":"chrome_web_store","api":"chrome_web_store"},{"src":"edge_add_ons","api":"edge_add_ons"},{"src":"firefox_add_ons","api":"firefox_add_ons"},{"src":"github_mcp_registry","api":"github_mcp_registry"},{"src":"hugging_face","api":"hugging_face"},{"src":"jetbrains","api":"jetbrains"},{"src":"linux","api":"linux"},{"src":"mac","api":"mac"},{"src":"notepad++","api":"notepad++"},{"src":"office_add_ins","api":"office_add_ins"},{"src":"open_vsx_registry","api":"open_vsx_registry"},{"src":"visual_studio","api":"visual_studio"},{"src":"vscode","api":"vscode"},{"src":"windows","api":"windows"},{"src":"windsurf","api":"windsurf"}]'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '19'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 140}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '19':
+    id: '19'
+    taskid: koixen00-0000-4000-8000-000000000019
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000019
+      version: -1
+      name: Parse the marketplace vocabulary map
+      description: 'ParseJSON the vocabulary map into an array of objects so the next task can filter it. A complex value evaluates root -> accessor -> filters -> transformers, so the parse cannot be folded into the lookup task: its transformers would run after its filters.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiMarketplaceMap
+      value:
+        complex:
+          root: KoiMarketplaceMapRaw
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '20'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 230}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '20':
+    id: '20'
+    taskid: koixen00-0000-4000-8000-000000000020
+    type: regular
+    task:
+      id: koixen00-0000-4000-8000-000000000020
+      version: -1
+      name: Normalize marketplace to the API vocabulary
+      description: 'Normalizes the caller-supplied marketplace onto the KOI API vocabulary. The value can reach this playbook from three kinds of source and the task is correct for all three. (a) EVENT-DERIVED - a caller that read marketplace out of a koi_koi_raw row (KOI Ext - Extract Alert Context, or any audit-driven playbook written against this pack) supplies a SHORT form such as software_windows or chrome, which every KOI item command rejects with HTTP 400; this task translates it. (b) ALREADY IN API FORM - KOI Ext - Alert Triage passes a value it has already resolved; the map identity rows pass it through unchanged, so running it through here a second time is a no-op, not a double-mapping bug. (c) COMMAND-DERIVED - Koi.Inventory.marketplace is already API-canonical and is NEVER sent through this task; the fallback branch below reads it directly, because allow-listing a command output against a static table would silently drop a marketplace KOI adds to the API later. A value with no row becomes EMPTY, which routes to that same inventory fallback.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: Enr.marketplace_in
+      value:
+        complex:
+          root: KoiMarketplaceMap
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiMarketplaceMap.src
+              operator: isEqualString
+              right:
+                iscontext: true
+                value:
+                  simple: Enr.marketplace_raw
+          - - left:
+                iscontext: true
+                value:
+                  simple: Enr.marketplace_raw
+              operator: isNotEmpty
+              right:
+                value: {}
+          accessor: api
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 320}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '21':
+    id: '21'
+    taskid: koixen00-0000-4000-8000-000000000021
+    type: condition
+    task:
+      id: koixen00-0000-4000-8000-000000000021
+      version: -1
+      name: Are a version AND a marketplace known?
+      description: 'koi-inventory-item-endpoints-list requires item_id AND marketplace AND version, all three. Neither an empty version nor an empty marketplace can produce a usable call, and an unknown (item_id, marketplace, version) triple returns HTTP 404 rather than an empty 200 (VERIFIED_FACTS 7b) - so the call is skipped rather than made and failed. Marketplace is empty when the caller supplied none, when the value they supplied has no API equivalent (ollama / built_in / side_loaded), and when the item is not in the org inventory. A "no" here normally means the item is not installed anywhere in the organization; endpoint exposure is then legitimately empty, which is what task 9 reports.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: Enr.version
+          operator: isNotEmpty
+          right:
+            value: {}
+      - - left:
+            iscontext: true
+            value:
+              simple: Enr.marketplace
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '9'
+      'yes':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 960}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
 view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 2520, "width": 780, "x": 250, "y": 50}}}'
 inputs:
 - key: item_id
@@ -679,7 +896,7 @@ inputs:
 - key: marketplace
   value: {}
   required: false
-  description: 'The item''s marketplace (npm, chrome_web_store, vscode, docker, ...). Optional here even though koi-inventory-item-endpoints-list requires it: when omitted, it is resolved from the org inventory record. Supply it when you know it - it narrows the inventory lookup.'
+  description: 'The item''s marketplace (npm, chrome_web_store, vscode, docker, ...). Optional here even though koi-inventory-item-endpoints-list requires it: when omitted, it is resolved from the org inventory record. Supply it when you know it - it narrows the inventory lookup. EITHER vocabulary is accepted - a raw event value (software_windows, chrome, vsc) is mapped to the API vocabulary by tasks 17-20, and a value already in API form passes through unchanged. A value with no API equivalent (ollama, built_in, side_loaded) is treated as unknown and resolved from the org inventory instead.'
   playbookInputQuery: null
 - key: version
   value: {}
