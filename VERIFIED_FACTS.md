@@ -611,6 +611,71 @@ produced ourselves rather than another tenant's traffic. `xdm.observer.name` and
 
 ---
 
+## 7e. 🚨 The Alerts stream is massively duplicated — every alert count must dedupe **[LIVE]**
+
+**The single most consequential finding for this pack.** The Marketplace integration re-sends every
+still-open alert on each fetch cycle, so `koi_koi_raw` carries one row **per alert per fetch**, not
+one row per alert.
+
+| Stream | Window | Rows | Distinct alerts | Inflation |
+|---|---|---|---|---|
+| **Alerts** | last 24 h | 734 | **3** | **244.7×** |
+| **Alerts** | last 90 d | 1,048 | 317 | 3.3× |
+| **Audit** | last 24 h | 257 | 257 (by KOI `id`) | **1.0 — none** |
+| **Audit** | last 90 d | 20,148 | 20,148 | **1.0 — none** |
+
+**Audit is unaffected** — audit records are point-in-time and each carries a unique KOI `id`.
+This is an Alerts-only problem.
+
+### 7e.1 The mechanism, verified
+
+Within a single notification: **357 rows, 1 distinct `_time`, 1 distinct `message`, 357 distinct
+`_insert_time`.** Identical alert content, re-inserted 357 times. With `eventFetchInterval = 1`
+(minute), 357 inserts ≈ 357 minutes of polling — the integration re-fetches open alerts every cycle
+and pushes them again. Nothing dedupes them on the way in, because the pack ships no parsing rule
+by default.
+
+### 7e.2 The only correct dedupe key is `metadata.notification_event_id`
+
+Three candidate identifiers, all measured over the same 90-day window:
+
+| Field | Distinct / 1,048 rows | What it identifies |
+|---|---|---|
+| `_id` | 1,048 | the **row** — counts every duplicate |
+| `metadata.notification_event_id` | **317** | the **alert occurrence** ✅ |
+| `observables[event.id]` (`koi_event_id`) | 20 | the **scan batch** — far too coarse |
+| `finding_info.uid` (`finding_uid`) | **3** | the **finding/policy definition** |
+
+`notification_event_id` is a verified 1:1 identity for the tuple
+`(item.id, device.id, finding_info.uid, finding_info.created_time)` — 317 ids, 317 tuples, zero
+collisions in either direction. The hierarchy is
+**scan batch ⊃ notification ⊃ duplicate rows**, and the notification level is exactly the one the
+pack currently has no column for.
+
+> **Every widget that does `count()` over Alerts is wrong** and must use
+> `count_distinct(koi_notification_id)`. On today's data the difference is 734 versus 3.
+
+### 7e.3 `xdm.alert.original_alert_id = finding_uid` is mis-mapped
+
+`finding_uid` has **3 distinct values across 1,048 alerts** (1 across the last 24 hours) — it is the
+finding **definition** id, shared by every alert raised by the same policy. It is not an alert
+identity and must not be `original_alert_id`. `notification_event_id` is the correct source.
+
+### 7e.4 Consequences for content
+
+1. Promote `koi_notification_id` from `metadata.notification_event_id` — a single
+   `json_extract_scalar`, no coalesce needed (`metadata` is a plain object, not an array).
+2. Re-point `xdm.alert.original_alert_id` from `finding_uid` to `koi_notification_id`.
+   Leave `xdm.event.id = _id` alone — a correlation key is not an event identity, and `_id` is the
+   only per-row unique value.
+3. Rewrite every Alerts-counting dashboard widget to `count_distinct(koi_notification_id)`.
+4. Any triage playbook that reacts per alert row will fire repeatedly for one real alert. Dedupe
+   on `koi_notification_id`.
+5. **Historical rows have no promoted column**, so dedupe on already-ingested data must use
+   `json_extract_scalar(metadata, "$.notification_event_id")` inline.
+
+---
+
 ## 8. Carried forward from the custom-pack investigation
 
 These are pack-independent (`SESSION_BRIEF.md` §6) and were **not** re-verified in this session.
