@@ -1,0 +1,255 @@
+// KOI Content Extension — parsing rule.
+//
+// Pack:      KoiContentExtension ("KOI Content Extension") v1.0.0.
+// Targets:   the koi_koi_raw dataset produced by the OFFICIAL MARKETPLACE
+//            KOI pack v1.2.3 (integration id "KOI", 13 commands).
+//            This pack ships NO integration of its own.
+//
+// Binding is by stream, not by pack: XSIAM matches the incoming
+// (vendor, product) pair against the [INGEST:] header below. The
+// Marketplace integration calls send_events_to_xsiam(vendor="koi",
+// product="koi"), so this rule attaches to its stream unchanged.
+//
+// Strategy: cache the JSON-string form of resources/observables once via a
+// chained alter, then use coalesce-of-positions with json_extract_scalar.
+// The pattern is identical in normal XQL and in XQLi, so every expression
+// here can be pasted into a search bar and prototyped against live rows —
+// which is exactly how this version was validated (90 days, 314 Alerts /
+// ~20,215 Audit rows, tenant api-ayman.xdr.eu, 21 July 2026).
+//
+// Why coalesce-of-positions instead of arraymap+@element: @element is
+// XQLi-only and cannot be tested in XQL. coalesce+if works in both
+// contexts, so we keep a tight test loop.
+//
+// Position bounds — LIVE-VERIFIED, do not tighten:
+//   observables max length 7 (idx 0..6); rule scans 0..7 -> 1 spare slot.
+//   resources   max length 3 (idx 0..2); rule scans 0..3 -> 1 spare slot.
+// The coalesce-by-type design is REQUIRED, not stylistic: resources[0].type
+// is "item" on 296 alerts but "mcp" on 18, so any fixed index would read
+// item data on 94% of rows.
+
+[INGEST:vendor="koi", product="koi", target_dataset="koi_koi_raw", no_hit=keep]
+// Audit rows only. The filter is LOAD-BEARING: created_at is present on
+// 20,215/20,215 audit rows but NULL on 314/314 alert rows, so applying this
+// unguarded would null _time on every alert. (Alerts take _time from
+// finding_info.created_time, which the integration already sets.)
+// Live check: _time already equals created_at truncated to whole seconds on
+// 100/100 sampled audit rows, so this assignment is currently a no-op. It is
+// kept as a cheap guard against an integration change — it is NOT a fix for
+// a broken timestamp, and must not be described as one.
+filter source_log_type = "Audit"
+| alter _time = created_at;
+
+filter source_log_type = "Alerts"
+| alter
+    // finding_info — single JSON object, no cast needed. All 4 resolve
+    // 314/314 on live data.
+    finding_uid           = json_extract_scalar(finding_info, "$.uid"),
+    finding_title         = json_extract_scalar(finding_info, "$.title"),
+    finding_created_time  = json_extract_scalar(finding_info, "$.created_time"),
+    // finding_info.types has array_length = 1 on 314/314, so arrayindex(...,0)
+    // discards nothing. NOTE: alert_type has exactly ONE distinct value in 90
+    // days of live data — "policy_violation". Anything downstream that branches
+    // on alert_type has nothing to branch on today. (This column is created
+    // here; the raw koi_koi_raw column of the same name is always null.)
+    alert_type            = arrayindex(json_extract_scalar_array(finding_info, "$.types"), 0),
+    // Cache the JSON-string form of the array-typed columns.
+    // NOTE: on this dataset `resources` and `observables` are ALREADY JSON
+    // strings, so to_json_string() is a verbatim identity no-op (verified
+    // byte-for-byte, 314/314). This stage CACHES, it does not normalise —
+    // and it is what makes the rule prototypable in plain XQL.
+    resources_str         = to_json_string(resources),
+    observables_str       = to_json_string(observables)
+| alter
+    // ── observables[] — match by .name across positions 0..7 ───────────
+    // The complete set of observable .name keys on live data is exactly 7:
+    // event.id, device.os, device.serial, item.id, item.version, item.type,
+    // item.marketplace. All 7 are promoted below.
+    item_id = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="item.id", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="item.id", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="item.id", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="item.id", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="item.id", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="item.id", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="item.id", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="item.id", json_extract_scalar(observables_str, "$.7.value"), null)),
+    item_type = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="item.type", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="item.type", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="item.type", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="item.type", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="item.type", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="item.type", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="item.type", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="item.type", json_extract_scalar(observables_str, "$.7.value"), null)),
+    alert_item_version = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="item.version", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="item.version", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="item.version", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="item.version", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="item.version", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="item.version", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="item.version", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="item.version", json_extract_scalar(observables_str, "$.7.value"), null)),
+    // item_marketplace — NEW in this pack. 296/314 (npm 293, chrome 3); absent
+    // on the 18 MCP alerts. Operationally important: `marketplace` is a
+    // REQUIRED argument on koi-inventory-item-get and
+    // koi-inventory-item-endpoints-list, and nothing else in the alert payload
+    // supplies it. Without this column an alert cannot be enriched back
+    // through the Marketplace integration's item-scoped commands.
+    item_marketplace = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="item.marketplace", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="item.marketplace", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="item.marketplace", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="item.marketplace", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="item.marketplace", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="item.marketplace", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="item.marketplace", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="item.marketplace", json_extract_scalar(observables_str, "$.7.value"), null)),
+    device_os_obs = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="device.os", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="device.os", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="device.os", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="device.os", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="device.os", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="device.os", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="device.os", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="device.os", json_extract_scalar(observables_str, "$.7.value"), null)),
+    device_serial = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="device.serial", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="device.serial", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="device.serial", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="device.serial", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="device.serial", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="device.serial", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="device.serial", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="device.serial", json_extract_scalar(observables_str, "$.7.value"), null)),
+    // koi_event_id — populated 314/314, but only 18 DISTINCT values across
+    // those 314 rows: it is a per-SCAN-BATCH UUID, not a per-occurrence one
+    // (~17.4 alert rows share each value). It is promoted as a BATCH
+    // CORRELATOR only. It is deliberately NOT used as xdm.event.id in the
+    // modeling rule — see KoiContentExtension ModelingRules.
+    koi_event_id = coalesce(
+        if(json_extract_scalar(observables_str, "$.0.name")="event.id", json_extract_scalar(observables_str, "$.0.value"), null),
+        if(json_extract_scalar(observables_str, "$.1.name")="event.id", json_extract_scalar(observables_str, "$.1.value"), null),
+        if(json_extract_scalar(observables_str, "$.2.name")="event.id", json_extract_scalar(observables_str, "$.2.value"), null),
+        if(json_extract_scalar(observables_str, "$.3.name")="event.id", json_extract_scalar(observables_str, "$.3.value"), null),
+        if(json_extract_scalar(observables_str, "$.4.name")="event.id", json_extract_scalar(observables_str, "$.4.value"), null),
+        if(json_extract_scalar(observables_str, "$.5.name")="event.id", json_extract_scalar(observables_str, "$.5.value"), null),
+        if(json_extract_scalar(observables_str, "$.6.name")="event.id", json_extract_scalar(observables_str, "$.6.value"), null),
+        if(json_extract_scalar(observables_str, "$.7.name")="event.id", json_extract_scalar(observables_str, "$.7.value"), null)),
+
+    // ── resources[] where .type="device" — positions 0..3 ──────────────
+    // All six below verified 314/314.
+    device_id = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.id"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.id"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.id"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.id"), null)),
+    alert_hostname = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.hostname"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.hostname"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.hostname"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.hostname"), null)),
+    device_last_seen = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.last_seen"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.last_seen"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.last_seen"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.last_seen"), null)),
+    device_last_user = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.last_logged_on_user"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.last_logged_on_user"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.last_logged_on_user"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.last_logged_on_user"), null)),
+    device_status = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.status"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.status"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.status"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.status"), null)),
+    device_registered_at = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.registered_at"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.registered_at"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="device", json_extract_scalar(resources_str, "$.2.data.registered_at"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.registered_at"), null)),
+    // DROPPED: device_network_user (was resources[device].data.network_user).
+    // The key exists on every device resource but its value is literally null
+    // on 314/314 alerts. Not emitted by Koi as of 2026-07.
+
+    // ── resources[] where .type="item" — positions 0..3 ────────────────
+    // NEW in this pack. The custom pack's rule never touched
+    // resources[type="item"] at all, despite it being present on 296 of 314
+    // alerts (94%) — the largest untapped surface in the payload.
+    // All three below verified 296/296 extension alerts (null on the 18 MCP
+    // alerts, which carry no "item" resource).
+    item_package_name = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="item", json_extract_scalar(resources_str, "$.0.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="item", json_extract_scalar(resources_str, "$.1.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="item", json_extract_scalar(resources_str, "$.2.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="item", json_extract_scalar(resources_str, "$.3.data.package_name"), null)),
+    item_risk_level = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="item", json_extract_scalar(resources_str, "$.0.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="item", json_extract_scalar(resources_str, "$.1.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="item", json_extract_scalar(resources_str, "$.2.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="item", json_extract_scalar(resources_str, "$.3.data.risk_level"), null)),
+    // item_criticality lives on the resource WRAPPER, not under .data —
+    // same shape as mcp_criticality below.
+    item_criticality = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="item", json_extract_scalar(resources_str, "$.0.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="item", json_extract_scalar(resources_str, "$.1.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="item", json_extract_scalar(resources_str, "$.2.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="item", json_extract_scalar(resources_str, "$.3.criticality"), null)),
+
+    // ── resources[] where .type="mcp" — positions 0..3 ─────────────────
+    // Denominator for every "N/18" below is the 18 MCP alerts.
+    mcp_id = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.mcp_id"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.mcp_id"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.mcp_id"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.mcp_id"), null)),
+    mcp_package_name = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.package_name"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.package_name"), null)),
+    mcp_type = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.mcp_type"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.mcp_type"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.mcp_type"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.mcp_type"), null)),
+    mcp_transport = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.transport"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.transport"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.transport"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.transport"), null)),
+    // mcp_url is CORRECTLY SPARSE, not broken: populated 2/18, exactly the two
+    // rows where mcp_type = "remote" (a local stdio MCP server has no URL).
+    // Keep it — it is the only network indicator on an MCP alert.
+    mcp_url = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.url"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.url"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.url"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.url"), null)),
+    mcp_risk_level = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.risk_level"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.risk_level"), null)),
+    mcp_risk_status = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.risk_status"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.risk_status"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.risk_status"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.risk_status"), null)),
+    // DROPPED: mcp_package_type (was resources[mcp].data.package_type) and
+    // mcp_installation_method (was resources[mcp].data.installation_method).
+    // Neither key exists under .data on any MCP resource — 0/18. The complete
+    // observed .data key set is: mcp_id, name, version, marketplace, mcp_type,
+    // transport, package_name, risk_level, risk_status, risk, url. Not emitted
+    // by Koi as of 2026-07.
+    //
+    // mcp_criticality lives on the resource WRAPPER, not under .data.
+    mcp_criticality = coalesce(
+        if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.criticality"), null),
+        if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.criticality"), null));

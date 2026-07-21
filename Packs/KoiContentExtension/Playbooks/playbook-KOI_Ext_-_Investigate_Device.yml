@@ -1,0 +1,394 @@
+id: KOI Ext - Investigate Device
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Investigate Device
+description: |-
+  Device posture check for the Marketplace KOI pack (Koi, v1.2.3 — 13 commands, integration only).
+  Given a device_id, lists everything KOI sees installed on that device, flags the items whose
+  risk_level is in risk_levels (default high,critical), and posts a posture summary plus a
+  risky-items table. Reusable from KOI Ext - Alert Triage or standalone. Best-effort: every
+  command task is continue-on-error.
+
+  THERE IS NO DEVICE OBJECT IN THIS PACK. The Marketplace pack ships no koi-devices-list,
+  no koi-device-inventory-get and no Koi.Device.* context prefix — the data model is
+  item-centric. A device is addressable only as a FILTER on inventory:
+  koi-inventory-list(device_id=<id>), which is a verified argument of that command
+  ("Filter devices by device ID"). Everything this playbook knows about the host therefore
+  comes back as Koi.Inventory.* item records, not as device attributes. The hostname cannot
+  be resolved from a device_id; it is passed in as an input and comes from the alert payload
+  (resources[type=device].data.hostname), or is left blank when running standalone.
+
+  Substitution vs the custom pack (KOI v1.3.0, 26 commands) this was ported from:
+    - koi-device-inventory-get(device_id, limit)  ->  koi-inventory-list(device_id, limit)
+      Koi.DeviceInventory.*  ->  Koi.Inventory.*
+      The records returned are ORG-LEVEL item records, so version, first_seen, last_seen,
+      endpoint_count and installs_count are organization-wide aggregates, NOT this device's.
+      Per-device activation_status, local install path, per-host version and per-host
+      first_seen are not available in this pack.
+    - koi-remediations-list  ->  DROPPED. No command in the 13 returns remediation records,
+      so "remediations on this host" is gone; the row was removed from the summary rather
+      than left showing zero.
+
+  CONTEXT HYGIENE: koi-inventory-list, koi-inventory-item-get and koi-inventory-search all
+  write the same Koi.Inventory.* paths and repeated calls APPEND. This playbook therefore
+  deletes Koi.Inventory before listing, so total_items and the risky-items table describe
+  the device only and are not inflated by an earlier item-scoped lookup made by the caller.
+  Callers that need an item-scoped Koi.Inventory value must capture it as a scalar BEFORE
+  invoking this playbook.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koiexdev-0000-4000-8000-000000000000
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: start
+    task:
+      id: koiexdev-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+  '1':
+    id: '1'
+    taskid: koiexdev-0000-4000-8000-000000000001
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000001
+      version: -1
+      name: Clear prior inventory context
+      description: Deletes Koi.Inventory so the device listing below is not mixed with an item-scoped inventory lookup made earlier by the caller. koi-inventory-list appends to Koi.Inventory on every call.
+      iscommand: false
+      brand: ''
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: Koi.Inventory
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '2'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 200}}'
+  '2':
+    id: '2'
+    taskid: koiexdev-0000-4000-8000-000000000002
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000002
+      version: -1
+      name: List inventory on the device
+      description: 'Everything KOI sees installed on this device. Substitutes the custom pack''s koi-device-inventory-get, which does not exist here: koi-inventory-list accepts device_id as a filter and returns org-level Koi.Inventory item records scoped to that device.'
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      device_id:
+        simple: ${inputs.device_id}
+      limit:
+        simple: '500'
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '3'
+      '#none#':
+      - '3'
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 370}}'
+  '3':
+    id: '3'
+    taskid: koiexdev-0000-4000-8000-000000000003
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000003
+      version: -1
+      name: Set total_items
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiDeviceInv.total_items
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: item_id
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '4'
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 540}}'
+  '4':
+    id: '4'
+    taskid: koiexdev-0000-4000-8000-000000000004
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000004
+      version: -1
+      name: Set risky_count
+      description: Counts the device's items whose Koi.Inventory.risk_level is in the risk_levels input. The vocabulary is low / medium / high / critical / pending.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiDeviceInv.risky_count
+      value:
+        complex:
+          root: Koi.Inventory
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: Koi.Inventory.risk_level
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: inputs.risk_levels
+          accessor: item_id
+          transformers:
+          - operator: count
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 710}}'
+  '5':
+    id: '5'
+    taskid: koiexdev-0000-4000-8000-000000000005
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000005
+      version: -1
+      name: Set summary
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiDeviceInv.summary
+      value:
+        simple: '### KOI Device Investigation — ${inputs.hostname} (${inputs.device_id})
+
+          | Field | Value |
+
+          |---|---|
+
+          | Items installed | ${KoiDeviceInv.total_items} |
+
+          | Risky items (${inputs.risk_levels}) | ${KoiDeviceInv.risky_count} |
+
+          _Item records are organization-wide; per-device version, install path and activation status are not available in the Marketplace KOI pack. Host remediation history is not available at all._
+
+          '
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '6'
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 880}}'
+  '6':
+    id: '6'
+    taskid: koiexdev-0000-4000-8000-000000000006
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000006
+      version: -1
+      name: Post device summary
+      description: Prints to the war room.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: ${KoiDeviceInv.summary}
+    nexttasks:
+      '#none#':
+      - '7'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1050}}'
+  '7':
+    id: '7'
+    taskid: koiexdev-0000-4000-8000-000000000007
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000007
+      version: -1
+      name: Post risky items table
+      description: Prints the risky items on this device to the war room.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        complex:
+          root: Koi.Inventory
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: Koi.Inventory.risk_level
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: inputs.risk_levels
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '8'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1220}}'
+  '8':
+    id: '8'
+    taskid: koiexdev-0000-4000-8000-000000000008
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: title
+    task:
+      id: koiexdev-0000-4000-8000-000000000008
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1390}}'
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 1500, "width": 600, "x": 450, "y": 20}}}'
+inputs:
+- key: device_id
+  value: {}
+  required: true
+  description: The KOI device ID. Used as the device_id filter on koi-inventory-list. In an alert this is resources[type=device].data.id.
+  playbookInputQuery: null
+- key: hostname
+  value: {}
+  required: false
+  description: The device hostname, for display only. It CANNOT be resolved from device_id in this pack — there is no device command. Supply it from the alert payload (resources[type=device].data.hostname).
+  playbookInputQuery: null
+- key: risk_levels
+  value:
+    simple: high,critical
+  required: false
+  description: Comma-separated Koi.Inventory.risk_level values to flag. Vocabulary - low, medium, high, critical, pending.
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty to let the platform pick the single enabled instance of the Marketplace KOI pack.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiDeviceInv.total_items
+  description: Number of inventory items KOI sees on the device.
+  type: number
+- contextPath: KoiDeviceInv.risky_count
+  description: Number of those items at a risk level listed in risk_levels.
+  type: number
+- contextPath: KoiDeviceInv.summary
+  description: Markdown device posture summary.
+  type: string
+- contextPath: Koi.Inventory
+  description: The inventory items on the device (org-level item records, filtered by device_id).
+  type: unknown
+tags:
+- koi
+- koi-ext
+quiet: false

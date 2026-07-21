@@ -1,0 +1,12 @@
+# .pack-ignore for the KOI Content Extension pack.
+#
+# Format (INI): one [file:<basename>] section per file, with a comma-separated
+# ignore=<validation codes> key. Example:
+#
+#   [file:playbook-KOI_Ext_-_Alert_Triage.yml]
+#   ignore=BA101
+#
+# No validations are suppressed at present. Add sections here only for findings
+# that have been reviewed and deliberately accepted; do not use this file to
+# silence BA101 (id != name) or PA128 (missing pack files) — both are fixed in
+# the content itself.

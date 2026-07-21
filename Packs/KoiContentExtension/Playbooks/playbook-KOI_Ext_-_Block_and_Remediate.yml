@@ -1,0 +1,740 @@
+id: KOI Ext - Block and Remediate
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Block and Remediate
+description: |-
+  Response playbook for a flagged KOI item, for the Marketplace KOI pack (Koi, v1.2.3 —
+  13 commands, integration only). Resolves the item's marketplace, runs the full
+  investigation (KOI Ext - Investigate Item), short-circuits if the item is already on the
+  blocklist, presents an analyst approval gate, and — only on approval — adds the item to
+  the organization-wide KOI blocklist with koi-blocklist-items-add.
+
+  SAFE BY DEFAULT. The blocklist write never fires without explicit analyst approval unless
+  the caller passes auto_block=true. KOI Ext - Alert Triage always passes auto_block=false.
+  This gate is a governance control, not a convenience — do not remove it.
+
+  Both commands this playbook depends on (koi-blocklist-get, via the investigation, and
+  koi-blocklist-items-add) exist in the Marketplace pack, so the response path ports intact.
+  Rewiring vs the custom pack: the sub-playbook KOI - Investigate Item becomes
+  KOI Ext - Investigate Item. The approval gate loses four decision lines that have no
+  substitute in this pack: catalog (Koidex) risk level and score, the AI risk summary,
+  remediation history and prior approval history. Allowlist state was added in their place.
+
+  koi-blocklist-items-add DECLARES NO OUTPUTS AT ALL in this pack (verified in
+  reference/marketplace-pack.json: "outputs": []). Nothing lands in context, so the playbook
+  CANNOT branch on the API's answer — it can only branch on whether the command task errored.
+  KoiBlock.status = "Blocked" therefore means "the add call returned without an error", not
+  "the API confirmed a new blocklist entry". Re-run koi-blocklist-get if you need proof.
+
+  MARKETPLACE IS LOAD-BEARING. koi-blocklist-items-add takes item_id + marketplace as a pair
+  ("required when not using items_list_raw_json_entry_id"), and the alert payload does not
+  always carry one — on live data item.marketplace is present on 296 of 314 alerts and is
+  absent on every MCP-server alert. When marketplace is not supplied, this playbook resolves
+  it from koi-inventory-list(item_id=<id>, limit=1) -> Koi.Inventory.marketplace. If it is
+  still unknown at the write step the block is SKIPPED rather than attempted, so a malformed
+  call is never made. Known trap: the alert observable can carry marketplace "chrome", while
+  the API's accepted vocabulary is "chrome_web_store" — prefer the value the inventory lookup
+  returns over the value the alert carried.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koiexblk-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koiexblk-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '12'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '12':
+    id: '12'
+    taskid: koiexblk-0000-4000-8000-000000000012
+    type: condition
+    task:
+      id: koiexblk-0000-4000-8000-000000000012
+      version: -1
+      name: Is the marketplace known?
+      description: koi-blocklist-items-add needs item_id AND marketplace together. When the caller did not supply marketplace (MCP-server alerts never carry one), resolve it from the org inventory instead.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.marketplace
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '13'
+      'yes':
+      - '15'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '13':
+    id: '13'
+    taskid: koiexblk-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000013
+      version: -1
+      name: Resolve marketplace from inventory
+      description: Looks the item up in the organization's inventory by item_id alone to recover its marketplace. koi-inventory-item-get cannot be used here - it requires item_id, marketplace AND version, all three.
+      iscommand: true
+      brand: ''
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${inputs.item_id}
+      limit:
+        simple: '1'
+      using: &id001
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - '14'
+      '#none#':
+      - '14'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 220, "y": 350}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '14':
+    id: '14'
+    taskid: koiexblk-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000014
+      version: -1
+      name: Set marketplace from inventory
+      description: Takes the marketplace off the inventory record. LastArrayElement is deliberate - koi-inventory-list appends to Koi.Inventory, so the last element is this task's own lookup.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.marketplace
+      value:
+        complex:
+          root: Koi.Inventory
+          accessor: marketplace
+          transformers:
+          - operator: LastArrayElement
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 220, "y": 520}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '15':
+    id: '15'
+    taskid: koiexblk-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000015
+      version: -1
+      name: Set marketplace from input
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.marketplace
+      value:
+        simple: ${inputs.marketplace}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 680, "y": 350}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '1':
+    id: '1'
+    taskid: koiexblk-0000-4000-8000-000000000001
+    type: playbook
+    task:
+      id: koiexblk-0000-4000-8000-000000000001
+      version: -1
+      name: Investigate the item
+      description: 'Runs the full KOI investigation: org risk, exposure (installs / signing / publisher / endpoints / users) and governance state (blocklist membership). Catalog risk, the AI risk summary, remediation history and approval history are not available in the Marketplace pack.'
+      playbookId: KOI Ext - Investigate Item
+      iscommand: false
+      brand: ''
+      type: playbook
+    scriptarguments:
+      item_id:
+        simple: ${inputs.item_id}
+      marketplace:
+        simple: ${KoiBlock.marketplace}
+      version:
+        simple: ${inputs.version}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '10'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 690}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '10':
+    id: '10'
+    taskid: koiexblk-0000-4000-8000-000000000010
+    type: condition
+    task:
+      id: koiexblk-0000-4000-8000-000000000010
+      version: -1
+      name: Already on the KOI blocklist?
+      description: The investigation already pulled the org blocklist with koi-blocklist-get - skip a redundant write if this item is on it.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              complex:
+                root: Koi.Blocklist
+                filters:
+                - - left:
+                      iscontext: true
+                      value:
+                        simple: Koi.Blocklist.item_id
+                    operator: inList
+                    right:
+                      iscontext: true
+                      value:
+                        simple: inputs.item_id
+                accessor: item_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '2'
+      'yes':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 860}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '11':
+    id: '11'
+    taskid: koiexblk-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000011
+      version: -1
+      name: Record already blocked
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.status
+      value:
+        simple: Already blocked
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 960, "y": 1030}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '2':
+    id: '2'
+    taskid: koiexblk-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: koiexblk-0000-4000-8000-000000000002
+      version: -1
+      name: Is approval required?
+      description: When auto_block is true the block proceeds without an approval gate; otherwise an analyst must approve. Default is false - approval required.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: auto
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.auto_block
+          operator: isEqualString
+          right:
+            value:
+              simple: 'true'
+    nexttasks:
+      '#default#':
+      - '3'
+      auto:
+      - '16'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1030}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '3':
+    id: '3'
+    taskid: koiexblk-0000-4000-8000-000000000003
+    type: condition
+    task:
+      id: koiexblk-0000-4000-8000-000000000003
+      version: -1
+      name: Approve blocking this item?
+      description: 'Analyst decision. Review the full KOI investigation before approving an organization-wide block.
+
+        Item: ${inputs.item_id} (${KoiBlock.marketplace})
+
+        Org risk: ${KoiInvestigation.org_risk_level} (score ${KoiInvestigation.org_risk_score}) | Publisher: ${KoiInvestigation.publisher} | Signed: ${KoiInvestigation.is_signed}
+
+        Org installs: ${KoiInvestigation.installs_count} | Endpoints affected: ${KoiInvestigation.endpoint_count} | Findings: ${KoiInvestigation.findings_count}
+
+        Hostnames: ${KoiInvestigation.hostnames}
+
+        Affected users: ${KoiInvestigation.affected_users}
+
+        Governance state - blocklist entries: ${KoiInvestigation.blocklisted_count} | allowlist entries: ${KoiInvestigation.allowlisted_count}
+
+        Reason for this request: ${inputs.reason}
+
+        NOTE: catalog (Koidex) risk, the AI risk summary, remediation history and prior approval history are NOT available in the Marketplace KOI pack v1.2.3 and are absent from this gate by design, not by omission.'
+      iscommand: false
+      brand: ''
+      type: condition
+    nexttasks:
+      Approve:
+      - '16'
+      Reject:
+      - '4'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 220, "y": 1200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '4':
+    id: '4'
+    taskid: koiexblk-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000004
+      version: -1
+      name: Record block rejected
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.status
+      value:
+        simple: Rejected
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 20, "y": 1540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '16':
+    id: '16'
+    taskid: koiexblk-0000-4000-8000-000000000016
+    type: condition
+    task:
+      id: koiexblk-0000-4000-8000-000000000016
+      version: -1
+      name: Is the item addressable?
+      description: Last guard before the write. koi-blocklist-items-add needs item_id AND marketplace; if marketplace could not be resolved the block is skipped rather than attempted with a half-formed call. This guard sits AFTER the approval gate so it can never be used to bypass it.
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiBlock.marketplace
+          operator: isNotEmpty
+          right:
+            value: {}
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.item_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '17'
+      'yes':
+      - '5'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '17':
+    id: '17'
+    taskid: koiexblk-0000-4000-8000-000000000017
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000017
+      version: -1
+      name: Record block skipped
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.status
+      value:
+        simple: Skipped - marketplace unknown
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 220, "y": 1540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '5':
+    id: '5'
+    taskid: koiexblk-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000005
+      version: -1
+      name: Add item to KOI blocklist
+      description: Adds the item to the organization-wide KOI blocklist. This command declares no outputs, so success is inferred from the absence of an error entry, not from returned data.
+      iscommand: true
+      brand: ''
+      script: '|||koi-blocklist-items-add'
+      type: regular
+    scriptarguments:
+      item_id:
+        simple: ${inputs.item_id}
+      marketplace:
+        simple: ${KoiBlock.marketplace}
+      created_by:
+        simple: ${inputs.created_by}
+      notes:
+        simple: ${inputs.reason}
+      using: *id001
+    nexttasks:
+      '#error#':
+      - '7'
+      '#none#':
+      - '6'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 680, "y": 1540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '6':
+    id: '6'
+    taskid: koiexblk-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000006
+      version: -1
+      name: Record block succeeded
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.status
+      value:
+        simple: Blocked
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 560, "y": 1710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '7':
+    id: '7'
+    taskid: koiexblk-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000007
+      version: -1
+      name: Record block failed
+      description: Set a value in context under the key you entered.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiBlock.status
+      value:
+        simple: Failed
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 1710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '8':
+    id: '8'
+    taskid: koiexblk-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koiexblk-0000-4000-8000-000000000008
+      version: -1
+      name: Post response summary
+      description: Prints the block outcome to the war room.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: '## KOI Block & Remediate — ${KoiBlock.status}
+
+          | Field | Value |
+
+          |---|---|
+
+          | Item | ${inputs.item_id} (${KoiBlock.marketplace}) |
+
+          | Outcome | **${KoiBlock.status}** |
+
+          | Org risk / publisher | ${KoiInvestigation.org_risk_level} / ${KoiInvestigation.publisher} |
+
+          | Org installs | ${KoiInvestigation.installs_count} |
+
+          | Endpoints affected | ${KoiInvestigation.endpoint_count} |
+
+          | Hostnames | ${KoiInvestigation.hostnames} |
+
+          | Reason | ${inputs.reason} |
+
+          _Outcome "Blocked" means koi-blocklist-items-add returned without an error. The command declares no outputs in Marketplace KOI pack v1.2.3, so the entry is not read back. Run koi-blocklist-get to confirm._'
+    nexttasks:
+      '#none#':
+      - '9'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 1880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '9':
+    id: '9'
+    taskid: koiexblk-0000-4000-8000-000000000009
+    type: title
+    task:
+      id: koiexblk-0000-4000-8000-000000000009
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2050}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 2160, "width": 1180, "x": 20, "y": 20}}}'
+inputs:
+- key: item_id
+  value: {}
+  required: true
+  description: The KOI item ID to block. In an alert this is observables[name="item.id"].value.
+  playbookInputQuery: null
+- key: marketplace
+  value: {}
+  required: false
+  description: The item's marketplace. Optional - when empty it is resolved from koi-inventory-list(item_id). Accepted values are the API vocabulary (npm, chrome_web_store, vscode, pypi, homebrew, ...); note the alert payload may carry "chrome", which the API does not accept.
+  playbookInputQuery: null
+- key: version
+  value: {}
+  required: false
+  description: The item version. Passed to the investigation so it can list the endpoints carrying this exact version; not used by the blocklist write itself.
+  playbookInputQuery: null
+- key: reason
+  value: {}
+  required: false
+  description: Reason / notes recorded on the blocklist entry and shown in the approval gate.
+  playbookInputQuery: null
+- key: created_by
+  value:
+    simple: xsoar-koi-response
+  required: false
+  description: Attribution recorded on the blocklist entry. The API documents this field as an email address.
+  playbookInputQuery: null
+- key: auto_block
+  value:
+    simple: 'false'
+  required: false
+  description: Set to true to skip the analyst approval gate and block automatically. Default false (approval required). KOI Ext - Alert Triage always passes false.
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty to let the platform pick the single enabled instance of the Marketplace KOI pack.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiBlock.status
+  description: The block outcome - Blocked / Rejected / Failed / Already blocked / Skipped - marketplace unknown.
+  type: string
+- contextPath: KoiBlock.marketplace
+  description: The marketplace actually used for the blocklist write.
+  type: string
+tags:
+- koi
+- koi-ext
+quiet: false

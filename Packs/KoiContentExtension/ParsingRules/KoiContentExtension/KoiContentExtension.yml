@@ -1,0 +1,8 @@
+fromversion: 8.4.0
+id: KoiContentExtension_ParsingRule
+name: KOI Content Extension Parsing Rule
+rules: ''
+samples: ''
+supportedModules:
+- xsiam
+tags: []

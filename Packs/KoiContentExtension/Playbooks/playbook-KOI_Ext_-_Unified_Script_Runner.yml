@@ -1,0 +1,302 @@
+id: KOI Ext - Unified Script Runner
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Unified Script Runner
+description: |-
+  Part of the KOI Content Extension pack, which extends the Marketplace KOI
+  pack v1.2.3 (integration id "KOI") - that pack must be installed on the
+  tenant.
+  KOI commands used by this playbook: none - it drives Cortex agents only, via
+  core-* commands in its sub-playbooks.
+
+  Main job playbook: reads the "Koi Script Runner" configuration List (a JSON
+  array of entries), then runs "KOI Ext - Unified Process Config Entry" for
+  every entry. Designed to be attached to a time-triggered Job.
+
+  Each list entry defines: script.name (or script.uuid), target.endpoint_os,
+  target.endpoint_groups / target.endpoint_hostnames, and optional disabled,
+  script.polling_interval_in_seconds, script.timeout_in_seconds and
+  notification (recipients + sendmail_instance.name) settings.
+
+  Prerequisite: a JSON List named exactly "Koi Script Runner" must exist under
+  Settings > Object Setup > Lists. The name is fixed at the task level because
+  ${lists.<name>} cannot be parameterized by a playbook input - renaming the
+  List means editing the "Load the Koi Script Runner configuration" task.
+starttaskid: "0"
+tasks:
+  "0":
+    id: "0"
+    taskid: 9a1b0001-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000000
+      version: -1
+      name: ""
+      iscommand: false
+      brand: ""
+      type: start
+    nexttasks:
+      '#none#':
+      - "1"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 50
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "1":
+    id: "1"
+    taskid: 9a1b0001-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000001
+      version: -1
+      name: Load the "Koi Script Runner" configuration
+      description: Loads and parses the JSON configuration from the "Koi Script Runner" List.
+      iscommand: false
+      brand: ""
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: config_entries
+      value:
+        complex:
+          root: lists
+          accessor: Koi Script Runner
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: "false"
+    nexttasks:
+      '#error#':
+      - "5"
+      '#none#':
+      - "2"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 220
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "2":
+    id: "2"
+    taskid: 9a1b0001-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000002
+      version: -1
+      name: Configuration entries found?
+      description: Verifies the List parsed into at least one configuration entry.
+      iscommand: false
+      brand: ""
+      type: condition
+    conditions:
+    - label: "yes"
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: config_entries
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - "5"
+      "yes":
+      - "3"
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 405
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "3":
+    id: "3"
+    taskid: 9a1b0001-0000-4000-8000-000000000003
+    type: playbook
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000003
+      version: -1
+      name: Process each configuration entry
+      description: Runs the Koi script for every configuration entry (invalid entries are reported by the sub-playbook).
+      playbookId: KOI Ext - Unified Process Config Entry
+      iscommand: false
+      brand: ""
+      type: playbook
+    scriptarguments:
+      config_entry:
+        complex:
+          root: config_entries
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ""
+      wait: 1
+      max: 100
+    nexttasks:
+      '#none#':
+      - "4"
+    separatecontext: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 480,
+          "y": 590
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "4":
+    id: "4"
+    taskid: 9a1b0001-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000004
+      version: -1
+      name: Close
+      description: commands.local.cmd.close.inv
+      iscommand: true
+      brand: Builtin
+      script: Builtin|||closeInvestigation
+      type: regular
+    scriptarguments: {}
+    nexttasks:
+      '#none#':
+      - "6"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 775
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "5":
+    id: "5"
+    taskid: 9a1b0001-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000005
+      version: -1
+      name: Report configuration error
+      description: Prints an error entry with a given message.
+      iscommand: false
+      brand: ""
+      script: PrintErrorEntry
+      type: regular
+    scriptarguments:
+      message:
+        simple: 'Koi Script Runner: no valid configuration found. Create a JSON List named "Koi Script Runner" containing an array of configuration entries (see the playbook description for the schema).'
+    nexttasks:
+      '#none#':
+      - "4"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 50,
+          "y": 590
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "6":
+    id: "6"
+    taskid: 9a1b0001-0000-4000-8000-000000000006
+    type: title
+    task:
+      id: 9a1b0001-0000-4000-8000-000000000006
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ""
+      type: title
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 265,
+          "y": 960
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 990,
+        "width": 660,
+        "x": 50,
+        "y": 50
+      }
+    }
+  }
+inputs: []
+outputs: []
+tags:
+- koi
+- koi-ext
+quiet: false
