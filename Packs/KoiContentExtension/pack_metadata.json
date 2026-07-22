@@ -41,6 +41,10 @@
         "Core": {
             "mandatory": true,
             "display_name": "Core"
+        },
+        "CortexXDR": {
+            "mandatory": false,
+            "display_name": "Cortex XDR by Palo Alto Networks"
         }
     }
 }

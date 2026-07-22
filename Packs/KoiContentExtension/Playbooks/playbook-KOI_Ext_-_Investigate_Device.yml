@@ -35,6 +35,21 @@ description: |-
   the device only and are not inflated by an earlier item-scoped lookup made by the caller.
   Callers that need an item-scoped Koi.Inventory value must capture it as a scalar BEFORE
   invoking this playbook.
+
+  OPTIONAL XDR ENRICHMENT (Theme D / D3c + D4) — best-effort, degrades gracefully.
+  A parallel right-hand lane (tasks 9-17) runs two XQL queries via xdr-xql-generic-query when a
+  hostname is available: (1) D3c "when did KOI last actually scan this device?" (xdr_data — KOI
+  is run-on-demand on Windows, so absence of KOI events means "no scan ran", not "nothing
+  changed"; the KOI agent's bundled interpreter makes the scan visible to XDR), and (2) D4 the
+  host acquisition timeline (koi_koi_raw Audit UNION xdr_data PROCESS — what KOI says arrived vs
+  which process brought it). Both key on ${inputs.hostname}. This introduces a dependency on the
+  Cortex XDR - XQL Query Engine integration, which is NOT the KOI integration and is NOT part of
+  this pack; it is declared OPTIONAL (mandatory:false) in pack_metadata.json (pack CortexXDR; on
+  Cortex platform the same command ships in Core). Every task in the lane is continue-on-error
+  and runs in PARALLEL with the KOI device listing, never blocking it: no hostname, or the engine
+  absent/slow/rate-limited, and the lane is skipped or errors while the KOI posture completes
+  unchanged. Neither query reads source_log_type = "Alerts", so the Alerts dedupe rule does not
+  apply.
 starttaskid: '0'
 tasks:
   '0':
@@ -59,6 +74,7 @@ tasks:
     nexttasks:
       '#none#':
       - '1'
+      - '9'
     continueonerrortype: ''
     view: '{"position": {"x": 450, "y": 50}}'
   '1':
@@ -250,6 +266,8 @@ tasks:
 
           _Item records are organization-wide; per-device version, install path and activation status are not available in the Marketplace KOI pack. Host remediation history is not available at all._
 
+          _Optional XDR enrichment: when a hostname is supplied and the Cortex XDR - XQL Query Engine is present, separate war-room notes post KOI scan freshness (D3c) and the host acquisition timeline (D4). Best-effort; absent when the engine is not installed._
+
           '
       append:
         simple: 'false'
@@ -352,7 +370,341 @@ tasks:
       type: title
     continueonerrortype: ''
     view: '{"position": {"x": 450, "y": 1390}}'
-view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 1500, "width": 600, "x": 450, "y": 20}}}'
+  '9':
+    id: '9'
+    taskid: koiexdev-0000-4000-8000-000000000009
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: condition
+    task:
+      id: koiexdev-0000-4000-8000-000000000009
+      version: -1
+      name: Is a hostname available for XDR correlation?
+      description: 'OPTIONAL XDR ENRICHMENT gate. The two XQL queries below key on agent_hostname, so they only run when a hostname was supplied (this pack cannot resolve one from device_id). No hostname -> the lane is skipped with a note and the KOI device posture completes unchanged. This whole lane runs in PARALLEL with the KOI listing and never blocks it.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.hostname
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '17'
+      'yes':
+      - '10'
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 50}}'
+  '10':
+    id: '10'
+    taskid: koiexdev-0000-4000-8000-000000000010
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000010
+      version: -1
+      name: Post XDR-correlation header
+      description: Prints a header for the optional Cortex XDR - XQL Query Engine enrichment, stating what the two tables below are and that they are empty when the engine is not installed.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: |-
+          ### XDR correlation for ${inputs.hostname} (optional XQL enrichment)
+          Two best-effort Cortex XDR queries over ${inputs.xql_time_frame} follow. (1) When KOI last actually scanned this host (Theme D / D3c) — KOI is run-on-demand on Windows, so silence from KOI can mean "no scan ran", not "nothing changed"; XDR sees the KOI agent's own bundled interpreter. (2) The host acquisition timeline — what KOI says arrived vs which process brought it (Theme D / D4). These use the Cortex XDR - XQL Query Engine integration, which is NOT part of the KOI pack; if it is absent the tables below are empty and the KOI device posture summary is unaffected.
+    nexttasks:
+      '#none#':
+      - '11'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 200}}'
+  '11':
+    id: '11'
+    taskid: koiexdev-0000-4000-8000-000000000011
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000011
+      version: -1
+      name: Clear prior XQL results (scan freshness)
+      description: Deletes PaloAltoNetworksXQL.GenericQuery so the scan-freshness query writes a clean result. xdr-xql-generic-query appends to that path, so it is cleared before each of the two queries in this lane.
+      iscommand: false
+      brand: ''
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '12'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 370}}'
+  '12':
+    id: '12'
+    taskid: koiexdev-0000-4000-8000-000000000012
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000012
+      version: -1
+      name: When did KOI last scan this device? (XQL)
+      description: 'THEME D / D3c — is silence from KOI on this host evidence of no change, or of no scan? Runs xdr-xql-generic-query (Cortex XDR - XQL Query Engine, NOT a KOI command) over xdr_data PROCESS for processes whose image path contains "Koi" (the KOI agent bundles its own interpreter under ...\Local\Koi\Python), keyed on agent_hostname = ${inputs.hostname}. Uses only xdr_data, so the Alerts dedupe rule does not apply. continue-on-error.'
+      iscommand: true
+      brand: ''
+      script: '|||xdr-xql-generic-query'
+      type: regular
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type = ENUM.PROCESS
+          | filter agent_hostname = "${inputs.hostname}"
+          | filter actor_process_image_path contains "Koi" or action_process_image_path contains "Koi"
+          | comp max(_time) as last_koi_agent_activity, min(_time) as first_koi_agent_activity, count() as processes_spawned_by_koi, count_distinct(action_process_causality_id) as scan_causality_chains, values(action_process_image_name) as koi_child_processes by agent_hostname
+          | limit 100
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+      query_name:
+        simple: KOI Ext - KOI scan freshness
+    nexttasks:
+      '#error#':
+      - '13'
+      '#none#':
+      - '13'
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 900, "y": 540}}'
+  '13':
+    id: '13'
+    taskid: koiexdev-0000-4000-8000-000000000013
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000013
+      version: -1
+      name: Post KOI scan-freshness table
+      description: Prints the XDR-derived KOI scan-freshness row (last scan, processes spawned, child processes) to the war room. Empty when the XQL engine is absent or the host has no KOI-agent activity in the window.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '14'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 710}}'
+  '14':
+    id: '14'
+    taskid: koiexdev-0000-4000-8000-000000000014
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000014
+      version: -1
+      name: Clear prior XQL results (acquisition timeline)
+      description: Deletes PaloAltoNetworksXQL.GenericQuery again so the acquisition-timeline query below writes a clean result rather than appending to the scan-freshness result.
+      iscommand: false
+      brand: ''
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '15'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 880}}'
+  '15':
+    id: '15'
+    taskid: koiexdev-0000-4000-8000-000000000015
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000015
+      version: -1
+      name: Host acquisition timeline (XQL)
+      description: 'THEME D / D4 — on this host, in this window, what arrived and which process brought it? Runs xdr-xql-generic-query (Cortex XDR - XQL Query Engine, NOT a KOI command) unioning koi_koi_raw Audit (what KOI says arrived) with xdr_data PROCESS (which installer/package-manager was running), both keyed on ${inputs.hostname}. The koi_koi_raw side reads source_log_type = "Audit" (NOT Alerts), so the Alerts dedupe rule does not apply. continue-on-error.'
+      iscommand: true
+      brand: ''
+      script: '|||xdr-xql-generic-query'
+      type: regular
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = koi_koi_raw
+          | filter source_log_type = "Audit" and type = "extensions"
+          | filter hostname = "${inputs.hostname}"
+          | filter action in ("installed", "updated")
+          | alter lane = "1_KOI_SAYS_ARRIVED"
+          | alter what = concat(object_name, " @", coalesce(item_version, "?"))
+          | alter how  = concat(coalesce(marketplace, "<unset>"), " / ", coalesce(platform, "?"))
+          | alter who  = coalesce(triggered_by, "-")
+          | fields _time, lane, what, how, who
+          | union
+          (dataset = xdr_data
+           | filter event_type = ENUM.PROCESS
+           | filter agent_hostname = "${inputs.hostname}"
+           | filter action_process_image_name in ("pip.exe", "pip3.exe", "npm.exe", "npx.exe", "node.exe", "git.exe", "curl.exe", "wget.exe", "winget.exe", "msiexec.exe", "choco.exe", "code.exe", "cursor.exe")
+           | filter action_process_image_command_line not contains "--type="
+           | alter lane = "2_XDR_BROUGHT_IT"
+           | alter what = coalesce(action_process_image_command_line, action_process_image_name)
+           | alter how  = concat(coalesce(actor_process_image_name, "?"), " -> ", coalesce(action_process_image_name, "?"))
+           | alter who  = coalesce(action_process_username, "-")
+           | fields _time, lane, what, how, who)
+          | sort asc _time
+          | limit 400
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+      query_name:
+        simple: KOI Ext - Host acquisition timeline
+    nexttasks:
+      '#error#':
+      - '16'
+      '#none#':
+      - '16'
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 900, "y": 1050}}'
+  '16':
+    id: '16'
+    taskid: koiexdev-0000-4000-8000-000000000016
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000016
+      version: -1
+      name: Post host acquisition timeline
+      description: Prints the two-lane acquisition timeline (KOI says arrived vs XDR brought it) to the war room. Empty when the XQL engine is absent.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '8'
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 1220}}'
+  '17':
+    id: '17'
+    taskid: koiexdev-0000-4000-8000-000000000017
+    separatecontext: false
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    type: regular
+    task:
+      id: koiexdev-0000-4000-8000-000000000017
+      version: -1
+      name: Record - XDR correlation skipped (no hostname)
+      description: The optional XDR enrichment needs a hostname and none was supplied. The Marketplace KOI pack cannot resolve one from device_id, so pass resources[type=device].data.hostname from the alert to enable it.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiDeviceInv.xdr_enrichment_state
+      value:
+        simple: 'XDR correlation skipped: no hostname supplied, so KOI scan freshness (D3c) and the host acquisition timeline (D4) could not run. Pass the alert hostname (resources[type=device].data.hostname) to enable the optional Cortex XDR - XQL Query Engine enrichment.'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    continueonerrortype: ''
+    view: '{"position": {"x": 1300, "y": 200}}'
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 1500, "width": 1400, "x": 450, "y": 20}}}'
 inputs:
 - key: device_id
   value: {}
@@ -375,6 +727,12 @@ inputs:
   required: false
   description: The KOI integration instance to use. Leave empty to let the platform pick the single enabled instance of the Marketplace KOI pack.
   playbookInputQuery: null
+- key: xql_time_frame
+  value:
+    simple: 7 days
+  required: false
+  description: 'Time frame for the OPTIONAL XDR-correlation XQL queries (Theme D / D3c scan freshness and D4 acquisition timeline), passed to xdr-xql-generic-query. Relative format, e.g. "24 hours", "7 days". Only used when a hostname is available and the Cortex XDR - XQL Query Engine integration is present; the enrichment is best-effort and skipped otherwise.'
+  playbookInputQuery: null
 outputs:
 - contextPath: KoiDeviceInv.total_items
   description: Number of inventory items KOI sees on the device.
@@ -387,6 +745,12 @@ outputs:
   type: string
 - contextPath: Koi.Inventory
   description: The inventory items on the device (org-level item records, filtered by device_id).
+  type: unknown
+- contextPath: KoiDeviceInv.xdr_enrichment_state
+  description: 'Optional XDR enrichment: set when the XDR correlation lane was skipped because no hostname was supplied.'
+  type: string
+- contextPath: PaloAltoNetworksXQL.GenericQuery
+  description: 'Optional XDR enrichment: raw result of the last xdr-xql-generic-query in the correlation lane (D3c scan freshness / D4 acquisition timeline). Present only when the Cortex XDR - XQL Query Engine integration is installed.'
   type: unknown
 tags:
 - koi
