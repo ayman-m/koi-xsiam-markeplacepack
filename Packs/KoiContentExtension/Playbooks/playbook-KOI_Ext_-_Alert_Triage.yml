@@ -7,6 +7,7 @@ description: |-
   integration only). Attach this as the playbook on KOI alerts ingested into Cortex XSIAM.
 
   Flow: KOI Ext - Extract Alert Context parses the alert payload into KoiContext ->
+  DUPLICATE DELIVERIES OF THE SAME KOI ALERT ARE SUPPRESSED ->
   the item is looked up in the organization's inventory -> KOI Ext - Investigate Item ->
   the org blocklist is read -> KOI Ext - Investigate Device when the alert carries a device ->
   a verdict is computed -> a triage summary is posted -> Benign is auto-closed, Malicious
@@ -14,15 +15,83 @@ description: |-
   forced false, Suspicious is left open for review.
 
   ============================================================================
+  DUPLICATE ALERTS — READ THIS BEFORE DEPLOYING. YOU MUST CONFIGURE ONE OF THE TWO.
+  ============================================================================
+  The Marketplace KOI integration re-sends every still-open alert on every fetch cycle
+  (eventFetchInterval defaults to 1 minute). koi_koi_raw therefore carries one row per alert
+  PER FETCH. Live, 90 days to 2026-07-21, tenant api-ayman.xdr.eu. koi_koi_raw grows
+  continuously, so the cohort census below and the dedupe measurement under it were taken
+  minutes apart and their row totals differ; each figure is quoted against the total it was
+  actually measured over, never against one notional total:
+
+    item_type     rows   distinct notification ids   inflation   last seen
+    extension      296            296                  1.0x      2026-07-09
+    mcp_server     842             21                 40.1x      current
+    ALL          1,138            317                  3.6x
+
+  A separate query the same day over the same 90-day window returned 1,048 rows for the same
+  317 distinct notification ids (~3.3x). Over the last 24 hours the ratio reaches ~245:1
+  (734 rows -> 3 distinct notifications, measured 21 July 2026). One mcp_server notification
+  was delivered 408 times in 6.8 hours. The duplication is confined to the mcp_server cohort — extension
+  alerts arrive exactly once — but mcp_server is effectively 100% of current ingestion.
+
+  UNCONTROLLED, THIS PLAYBOOK RUNS ONCE PER DELIVERY: one real KOI alert becomes up to 245
+  full investigations, 245 device sweeps, 245 war-room summaries and, for a Malicious verdict,
+  245 analyst approval gates. It also risks the correlation rule itself: Cortex XSIAM
+  automatically DISABLES a correlation rule that reaches 5,000 hits in 24 hours, and at one
+  delivery per minute per open alert that ceiling is roughly four concurrently-open KOI alerts.
+
+  The only correct dedupe key is metadata.notification_event_id — 317 distinct values across
+  1,048 rows (21 July 2026) and a verified 1:1 identity for
+  (item.id, device.id, finding_info.uid, finding_info.created_time). It is 100% populated.
+  Do NOT use finding_uid (3 distinct — it is the POLICY id), koi_event_id (20 distinct — the
+  SCAN BATCH id) or the row _id (unique per duplicate). KOI Ext - Extract Alert Context now
+  publishes it as KoiContext.notification_id.
+
+  --- OPTION A (preferred): suppress at the correlation rule, so the alerts are never made.
+  This pack's integration is EVENT-COLLECTION ONLY (isfetchevents, no fetch-incidents), so
+  every KOI alert in your tenant is created by a correlation rule you wrote over koi_koi_raw.
+  That is the only layer that can stop duplicate alerts from existing. In the correlation
+  rule:
+    1. Surface the key in the rule's XQL, e.g.
+         | alter koi_notification_id = json_extract_scalar(metadata, "$.notification_event_id")
+       (or use the koi_notification_id column this pack's parsing rule promotes).
+    2. Turn on Issue Suppression: "Enable issues suppression", Fields = koi_notification_id,
+       Duration time = 1 Day (the documented maximum, and comfortably longer than the 6.8-hour
+       longest re-send run observed).
+    3. Map koi_notification_id into an alert field in the rule's Issue Field Mapping — that
+       field is also what Option B needs.
+  Note the documented limit: suppression Duration caps at 1 day. An alert KOI keeps open for
+  longer than a day can therefore still re-alert once per day. Option B catches those.
+
+  --- OPTION B (this playbook, defence in depth): tasks 24-32.
+  Set the dedupe_alert_field input to the machine name of the alert field carrying the
+  notification id. The playbook then searches for an earlier alert with the same id and, if
+  it finds one, closes this alert as a duplicate WITHOUT investigating. Its limits, stated
+  plainly:
+    - It needs that alert field to exist and be searchable. It cannot be done from context
+      alone: a playbook cannot read another alert's context, so the key must be a field.
+    - It is best-effort and not atomic. Two deliveries processed in the same instant could
+      both pass the check. At one delivery per minute this is a narrow window, not a design
+      guarantee.
+    - It reacts AFTER the alert exists. The 245 alerts are still created and still counted
+      against the correlation rule's 5,000/24h auto-disable ceiling; only the investigation
+      is skipped. Option A is what prevents the alerts.
+    - It FAILS OPEN. If the notification id is missing, the field name is not configured, or
+      ${alert.id} does not resolve, the gate is skipped and the alert is triaged normally.
+      Nothing here can close a first delivery.
+
+  ============================================================================
   ALERT_TYPE IS NOT USABLE AS A DISCRIMINATOR ON THIS DATA
   ============================================================================
   The custom pack's version of this playbook branched on KoiContext.alert_type values
   "Removed from Marketplace" / "Publisher Compromised" / "Unvetted MCP Server" / "New Item".
-  Live validation of koi_koi_raw (314 Alerts rows, 90 days, tenant api-ayman.xdr.eu):
-  alert_type has EXACTLY ONE distinct value — "policy_violation" — on 314/314 rows. Every one
-  of those branches was dead. They have been removed rather than shipped as dead code, and
-  the verdict has been re-keyed onto signals that actually vary. alert_type is still shown in
-  the triage summary for the record; it is never tested.
+  Live validation of koi_koi_raw (1,048 Alerts rows = 317 alert occurrences, 90 days to
+  21 July 2026, tenant
+  api-ayman.xdr.eu): alert_type has EXACTLY ONE distinct value — "policy_violation". Every
+  one of those branches was dead. They have been removed rather than shipped as dead code,
+  and the verdict has been re-keyed onto signals that actually vary. alert_type is still
+  shown in the triage summary for the record; it is never tested.
 
   ============================================================================
   VERDICT MATRIX
@@ -30,40 +99,53 @@ description: |-
   Four signals, all captured as scalars before any device-wide inventory call can overwrite
   them. Labels are evaluated top to bottom; the first that matches wins.
 
-    A  KoiContext.risk_level      the alert's own risk level. Live distribution over 90 days:
-                                  low 204 | medium 52 | pending 47 | high 8 | critical 3.
+    A  KoiContext.risk_level      the alert's own risk level. Live distribution per ALERT
+                                  OCCURRENCE over 90 days:
+                                  low 204 | medium 52 | pending 50 | high 8 | critical 3.
+                                  All five vocabulary values occur — no literal below is dead.
                                   (severity is 1:1 with this: Low/Medium/Informational/High/Critical.)
-    B  KoiContext.item_type       extension 296 | mcp_server 18.
+    B  KoiContext.item_type       extension 296 | mcp_server 21. Both literals occur.
     C  KoiTriage.org_risk_level   Koi.Inventory.risk_level for this item from the organization's
                                   own inventory — the substitute for the custom pack's
-                                  koi-koidex-risk-report. Empty when the item is not installed
-                                  anywhere in the org.
+                                  koi-koidex-risk-report. EMPTY IS INCONCLUSIVE, NOT "CLEAN" AND
+                                  NOT "ABSENT FROM THE ORG": the inventory index lags the event
+                                  stream (VERIFIED_FACTS 7d.3 — items visible in events at
+                                  06:06 were still returning total_count 0 from the inventory
+                                  API at 06:21), so the freshly-alerted item an alert is most
+                                  likely to be about routinely has no inventory record YET.
     D  KoiTriage.blocklisted_item non-empty when item_id already appears in koi-blocklist-get.
 
     MALICIOUS   if ANY of:  A in {critical, high}
                             C in {critical, high}
                             D non-empty
-      Rationale. A is the alert's own assessment and only 11 of 314 alerts reach high/critical,
-      so escalating all of them is affordable. C catches the case where the alert itself is
-      unremarkable but the same item is rated high/critical against the org's installed base.
-      D is a governance breach: the item is already forbidden org-wide and is still generating
-      alerts, which is worth an analyst either way.
+      Rationale. A is the alert's own assessment and only 11 of 317 alert occurrences reach
+      high/critical, so escalating all of them is affordable. C catches the case where the
+      alert itself is unremarkable but the same item is rated high/critical against the org's
+      installed base. D is a governance breach: the item is already forbidden org-wide and is
+      still generating alerts, which is worth an analyst either way.
 
     SUSPICIOUS  if ANY of:  B = mcp_server
                             A in {medium, pending}
                             C = medium
       Rationale. mcp_server is never auto-closed: MCP servers are the least-vetted surface in
-      the estate (live data: mcp_risk_level is "pending" on 16 of 18 and "critical" on 2 — the
-      distribution contains no assessed-low value at all), they are only 18 of 314 alerts so the
-      review cost is bounded, and they are the one item type whose alerts carry no marketplace,
-      which means automated response cannot address them anyway. "pending" is an unfinished
-      assessment, not a clean bill of health, so it must not close. medium on either the alert
-      or the org record stays open.
+      the estate (live data: their risk_level is "pending" on 19 of 21 occurrences and
+      "critical" on 2 — the distribution contains no assessed-low value at all), and they are
+      the one item type whose alerts carry NO marketplace, which means automated response
+      cannot address them anyway. "pending" is an unfinished assessment, not a clean bill of
+      health, so it must not close. medium on either the alert or the org record stays open.
+      NOTE the changed economics: mcp_server was 21 of 317 occurrences over 90 days but is
+      effectively 100% of current ingestion (no extension alert since 2026-07-09), so this is
+      no longer a bounded-cost branch — it is the main one. Duplicate suppression, not a
+      narrower rule, is what keeps the review cost down.
 
     BENIGN      only if ALL of:  A = low  AND  B = extension
       Rationale. Reached only after MALICIOUS and SUSPICIOUS have both failed, so by evaluation
       order it also implies C is not high/critical/medium and the item is not blocklisted. This
-      is the single auto-close path and it is the narrowest of the three.
+      is the single auto-close path and it is the narrowest of the three. Be aware of what an
+      empty C contributes here: because the inventory index lags, a genuinely new item can
+      auto-close on A and B alone. That is deliberate — A=low is KOI's own assessment of the
+      item that triggered the alert — but the close note must not be read as "the org has
+      never seen this item".
 
     DEFAULT -> SUSPICIOUS. Anything unclassified — empty risk_level, an item_type or risk level
       the vendor adds later, a failed lookup — stays open for a human. Suspicious remains the
@@ -77,11 +159,14 @@ description: |-
       Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level (captured as
       KoiTriage.org_risk_level). koi-inventory-item-get is NOT usable as the substitute: it
       requires item_id AND marketplace AND version, all three, and version is not known here.
-      Capability delta: this is the ORGANIZATION's risk record, not the vendor catalog's. An
-      item nobody in the org has installed returns nothing, so C is empty for exactly the
-      newly-appeared item an alert is most likely to be about, and the verdict then rests on
-      A, B and D. Koi.KoidexRiskReport.ai_risk_summary and the Koidex compliance block have no
-      equivalent among the 13 commands and are gone from the summary.
+      Capability delta: this is the ORGANIZATION's risk record, not the vendor catalog's. It
+      returns nothing both when nobody in the org has the item AND when the inventory index has
+      simply not caught up with the event stream yet — and the two are indistinguishable from
+      here. C is therefore empty for exactly the newly-appeared item an alert is most likely to
+      be about, and the verdict then rests on A, B and D. Report an empty C as INCONCLUSIVE /
+      NOT YET INDEXED, never as "the organization does not have this item".
+      Koi.KoidexRiskReport.ai_risk_summary and the Koidex compliance block have no equivalent
+      among the 13 commands and are gone from the summary.
     - Sub-playbooks repointed to KOI Ext - Extract Alert Context, KOI Ext - Investigate Item,
       KOI Ext - Investigate Device and KOI Ext - Block and Remediate.
 
@@ -104,10 +189,14 @@ description: |-
        KoiContext.marketplace_raw for the record). KoiTriage.marketplace is seeded from the
        MAPPED value, then overwritten by Koi.Inventory.marketplace when the inventory lookup
        returned one - that is a COMMAND output, already API-canonical, and is used as-is
-       rather than re-mapped. Both are therefore safe to pass to the sub-playbooks. An empty
-       marketplace is expected (all 18 MCP alerts, and any event value with no API equivalent:
-       ollama, built_in, side_loaded); KOI Ext - Block and Remediate re-resolves it by item_id
-       and skips the write if it still cannot.
+       rather than re-mapped. Both are therefore safe to pass to the sub-playbooks. AN EMPTY
+       MARKETPLACE IS NOW THE COMMON CASE, NOT THE EXCEPTION: no mcp_server alert carries one
+       (0 of 21), no extension alert has arrived since 2026-07-09, and the inventory fallback
+       that used to recover it also comes back empty while the index lags. Expect the item
+       branch to run with marketplace unknown on most current alerts. Nothing here requires it
+       — the item gate keys on item_id alone (task 2), koi-inventory-list takes marketplace as
+       an optional FILTER, and KOI Ext - Block and Remediate re-resolves it by item_id and
+       SKIPS the blocklist write rather than making a malformed call if it still cannot.
 starttaskid: '0'
 tasks:
   '0':
@@ -149,10 +238,353 @@ tasks:
       type: playbook
     nexttasks:
       '#none#':
-      - '2'
+      - '24'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '24':
+    id: '24'
+    taskid: koiextri-0000-4000-8000-000000000024
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000024
+      version: -1
+      name: Capture this alert's own id
+      description: 'Needed so the duplicate search can exclude the alert it is running in. If ${alert.id} does not resolve on your platform the value is EMPTY, the next condition fails, and duplicate suppression is skipped - the alert is still triaged normally. That fail-open behaviour is deliberate: an unresolved self-id must never let this playbook mistake the first delivery for a duplicate and close it.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.self_alert_id
+      value:
+        simple: ${alert.id}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '25'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1180, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '25':
+    id: '25'
+    taskid: koiextri-0000-4000-8000-000000000025
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000025
+      version: -1
+      name: Can duplicate suppression be evaluated?
+      description: 'All three preconditions must hold: the alert carried a notification id, the operator told us which alert field carries it (inputs.dedupe_alert_field), and this alert''s own id resolved. If any is missing the gate is SKIPPED and full triage runs - never the other way round. Missing preconditions are the normal state on a tenant that has not yet done the correlation-rule configuration described in this playbook''s description, so this path must stay harmless.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.notification_id
+          operator: isNotEmpty
+          right:
+            value: {}
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.dedupe_alert_field
+          operator: isNotEmpty
+          right:
+            value: {}
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.self_alert_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '31'
+      'yes':
+      - '26'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1180, "y": 340}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '26':
+    id: '26'
+    taskid: koiextri-0000-4000-8000-000000000026
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000026
+      version: -1
+      name: Build the duplicate search query
+      description: 'Assembles the alert-search query "<field>:\"<notification id>\"". The field name is an input rather than a literal because the machine name of the alert field that carries the KOI notification id is decided by YOUR correlation rule''s field mapping, not by this pack. Nothing else in the query - no type filter, no status filter - because a duplicate that was already auto-closed by a previous run of this playbook must still count as a duplicate.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.dedupe_query
+      value:
+        simple: ${inputs.dedupe_alert_field}:"${KoiContext.notification_id}"
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '27'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1180, "y": 480}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '27':
+    id: '27'
+    taskid: koiextri-0000-4000-8000-000000000027
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000027
+      version: -1
+      name: Search for siblings of this notification
+      description: 'SearchIncidentsV2 (CommonScripts - already a mandatory dependency of this pack). Returns every alert already created for the same KOI notification id inside the lookback window. Continue-on-error: if the field does not exist the search errors or returns nothing, the gate finds no duplicate, and triage proceeds - fail-open. Keep the lookback at least as long as KOI keeps re-sending a single alert; the longest re-send run observed on live data is 6.8 hours (408 deliveries, one per minute), so the 3-day default is generous. includeinformational IS DELIBERATELY TRUE AND MUST STAY TRUE: KOI risk_level "pending" maps to Informational severity, and pending is 19 of the 21 mcp_server alerts - i.e. precisely the cohort that is duplicated 40x. With the default (false) the search would silently miss the duplicates that matter most. limit is used rather than the deprecated size argument.'
+      iscommand: false
+      brand: ''
+      script: SearchIncidentsV2
+      type: regular
+    scriptarguments:
+      query:
+        simple: ${KoiTriage.dedupe_query}
+      fromdate:
+        simple: ${inputs.dedupe_lookback}
+      limit:
+        simple: '100'
+      includeinformational:
+        simple: 'true'
+    nexttasks:
+      '#error#':
+      - '28'
+      '#none#':
+      - '28'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 1180, "y": 620}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '28':
+    id: '28'
+    taskid: koiextri-0000-4000-8000-000000000028
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000028
+      version: -1
+      name: Identify prior alerts for the same notification
+      description: Every hit except this alert itself. The self-exclusion is what makes the FIRST delivery of a notification fall through to full triage while deliveries 2..N are recognised as duplicates.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.duplicate_of
+      value:
+        complex:
+          root: foundIncidents
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: foundIncidents.id
+              operator: isNotEqualString
+              right:
+                iscontext: true
+                value:
+                  simple: KoiTriage.self_alert_id
+          accessor: id
+          transformers:
+          - operator: uniq
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ','
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '29'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1180, "y": 760}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '29':
+    id: '29'
+    taskid: koiextri-0000-4000-8000-000000000029
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000029
+      version: -1
+      name: Is this a re-delivery of an alert already under investigation?
+      description: 'If an earlier alert exists for this notification id, stop here: close this one as a duplicate and do not run the investigation, the device sweep, the verdict or the block gate. On live data one mcp_server alert was re-delivered 408 times, so this is the difference between 1 investigation and 408.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: duplicate
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.duplicate_of
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '32'
+      duplicate:
+      - '30'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1180, "y": 900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '30':
+    id: '30'
+    taskid: koiextri-0000-4000-8000-000000000030
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000030
+      version: -1
+      name: Close as duplicate delivery
+      description: 'commands.local.cmd.close.inv - closes this re-delivery and points the analyst at the alert that is actually being investigated. closeReason "Duplicate" is the XSOAR built-in value; if your tenant uses a custom close-reason vocabulary, change it to the tenant''s equivalent - a close reason the tenant does not know will make this task fail and the duplicate will stay open.'
+      iscommand: true
+      brand: Builtin
+      script: Builtin|||closeInvestigation
+      type: regular
+    scriptarguments:
+      closeReason:
+        simple: Duplicate
+      closeNotes:
+        simple: 'KOI duplicate delivery. The Marketplace KOI integration re-sends every still-open alert on each fetch cycle (once a minute), so this is the same KOI alert occurrence as an alert already open. KOI notification_event_id ${KoiContext.notification_id} — already handled by alert(s) ${KoiTriage.duplicate_of}. Item ${KoiContext.item_id} on ${KoiContext.alert_hostname}. Closed without investigation.'
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1450, "y": 1040}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '31':
+    id: '31'
+    taskid: koiextri-0000-4000-8000-000000000031
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000031
+      version: -1
+      name: Record - duplicate suppression not evaluated
+      description: 'Records that the gate could not run. This is NOT a safe steady state: without either this gate or correlation-rule issue suppression, one real KOI alert produces up to 245 investigations. Read the DUPLICATE ALERTS section of this playbook''s description and configure one of the two.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.dedupe_state
+      value:
+        simple: not evaluated (no notification id, no dedupe_alert_field, or no self alert id) - duplicate KOI deliveries are NOT being suppressed by this playbook
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 480}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '32':
+    id: '32'
+    taskid: koiextri-0000-4000-8000-000000000032
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000032
+      version: -1
+      name: Record - first delivery of this notification
+      description: No earlier alert carries this notification id, so this is the occurrence to investigate.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.dedupe_state
+      value:
+        simple: first delivery of this KOI notification id
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '2'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 900, "y": 1040}}'
     note: false
     timertriggers: []
     ignoreworker: false
@@ -168,7 +600,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000002
       version: -1
       name: Is an item identifiable?
-      description: Gated on item_id alone, not on item_id + marketplace as in the custom pack. koi-inventory-list filters on item_id by itself, and MCP-server alerts never carry a marketplace - requiring one would drop 18 of 314 alerts out of the item path entirely.
+      description: 'Gated on item_id alone, not on item_id + marketplace as in the custom pack. koi-inventory-list filters on item_id by itself, and mcp_server alerts NEVER carry a marketplace (0 of 21 occurrences). Since no extension alert has arrived since 2026-07-09, requiring a marketplace here would today drop essentially EVERY alert out of the item path. item_id itself is present on 317 of 317 occurrences.'
       iscommand: false
       brand: ''
       type: condition
@@ -205,7 +637,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000003
       version: -1
       name: Look the item up in the org inventory
-      description: 'Substitutes koi-koidex-risk-report, which does not exist in the Marketplace pack. Returns the ORGANIZATION''s record for the item: risk_level, risk score, publisher, signing, install and endpoint counts, and the API-canonical marketplace value. The marketplace argument is fed from KoiContext.marketplace, the value KOI Ext - Extract Alert Context has already mapped onto the API vocabulary; passing the raw event value would return HTTP 400 and lose signal C of the verdict matrix. It is only a filter here, so an empty value simply widens the lookup. Continue-on-error: a failed lookup leaves C empty and the verdict falls back to A, B and D.'
+      description: 'Substitutes koi-koidex-risk-report, which does not exist in the Marketplace pack. Returns the ORGANIZATION''s record for the item: risk_level, risk score, publisher, signing, install and endpoint counts, and the API-canonical marketplace value. The marketplace argument is fed from KoiContext.marketplace, the value KOI Ext - Extract Alert Context has already mapped onto the API vocabulary; passing the raw event value would return HTTP 400 and lose signal C of the verdict matrix. It is only a FILTER here, so an empty value simply widens the lookup - which is what happens on most current alerts, since no mcp_server alert carries a marketplace and mcp_server is effectively all of today''s ingestion. Continue-on-error: a failed lookup leaves C empty and the verdict falls back to A, B and D. AN EMPTY OR ZERO-ROW RESULT IS INCONCLUSIVE, NOT AN ABSENCE - the inventory index lags the event stream (VERIFIED_FACTS 7d.3), so the newly-alerted item this playbook is most often called about has no inventory record yet.'
       iscommand: true
       brand: ''
       script: '|||koi-inventory-list'
@@ -259,7 +691,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000004
       version: -1
       name: Capture org risk level
-      description: Signal C of the verdict matrix, captured as a scalar now because the device investigation later appends up to 500 rows to Koi.Inventory. LastArrayElement reads this playbook's own lookup.
+      description: 'Signal C of the verdict matrix, captured as a scalar now because the device investigation later appends up to 500 rows to Koi.Inventory. LastArrayElement reads this playbook''s own lookup. Empty here means the lookup was INCONCLUSIVE - no org record, or the inventory index has not indexed the item yet - and the verdict falls back to A, B and D. It never means the item is safe or absent.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -562,7 +994,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000012
       version: -1
       name: Determine verdict
-      description: 'The verdict matrix. Labels are evaluated in order; first match wins. MALICIOUS: alert risk high/critical, OR org inventory risk high/critical, OR the item is already blocklisted. SUSPICIOUS: item_type mcp_server, OR alert risk medium/pending, OR org risk medium. BENIGN: alert risk low AND item_type extension (reachable only after both tests above failed). Default is Suspicious. alert_type is deliberately not tested - it has one value, policy_violation, on 314 of 314 live alerts.'
+      description: 'The verdict matrix. Labels are evaluated in order; first match wins. MALICIOUS: alert risk high/critical, OR org inventory risk high/critical, OR the item is already blocklisted. SUSPICIOUS: item_type mcp_server, OR alert risk medium/pending, OR org risk medium. BENIGN: alert risk low AND item_type extension (reachable only after both tests above failed). Default is Suspicious. alert_type is deliberately not tested - it has exactly one distinct value, policy_violation, on all 317 distinct alerts across the 1,048 live alert rows measured 21 July 2026.'
       iscommand: false
       brand: ''
       type: condition
@@ -807,13 +1239,15 @@ tasks:
 
           | Item type (B) | ${KoiContext.item_type} |
 
-          | Org inventory risk (C) | ${KoiTriage.org_risk_level} (score ${KoiTriage.org_risk_score}) |
+          | Org inventory risk (C) | ${KoiTriage.org_risk_level} (score ${KoiTriage.org_risk_score}) — blank means INCONCLUSIVE: either the org has no record or the inventory index has not caught up with the alert yet. It does not mean the item is absent from the organization. |
 
           | Already blocklisted (D) | ${KoiTriage.blocklisted_item} |
 
+          | KOI notification id | ${KoiContext.notification_id} — the alert occurrence identity. KOI re-sends open alerts every minute; duplicate suppression: ${KoiTriage.dedupe_state} |
+
           | Item | ${KoiContext.item_id} (${KoiTriage.marketplace}) |
 
-          | Marketplace as the event wrote it | ${KoiContext.marketplace_raw} (mapped to "${KoiTriage.marketplace}" - the KOI event and KOI API vocabularies differ) |
+          | Marketplace as the event wrote it | ${KoiContext.marketplace_raw} (mapped to "${KoiTriage.marketplace}" - the KOI event and KOI API vocabularies differ). Blank is normal: no mcp_server alert carries a marketplace, and mcp_server is effectively all current ingestion. |
 
           | Item version | ${KoiContext.item_version} |
 
@@ -823,7 +1257,7 @@ tasks:
 
           | Alert type | ${KoiContext.alert_type} (constant "policy_violation" on this data - not used in the verdict) |
 
-          _Org inventory risk is the organization''s own record for this item, from koi-inventory-list. The Marketplace KOI pack v1.2.3 has no Koidex catalog risk report and no AI risk summary._'
+          _Org inventory risk is the organization''s own record for this item, from koi-inventory-list. An empty value is INCONCLUSIVE - the inventory index lags the event stream, so a freshly-alerted item routinely has no record yet - and must not be read as "not present in the organization". The Marketplace KOI pack v1.2.3 has no Koidex catalog risk report and no AI risk summary._'
       append:
         simple: 'false'
     nexttasks:
@@ -936,7 +1370,7 @@ tasks:
       closeReason:
         simple: Resolved
       closeNotes:
-        simple: 'KOI triage: Benign — extension ${KoiContext.item_id} at alert risk level ${KoiContext.risk_level}, org inventory risk ${KoiTriage.org_risk_level}, not blocklisted. Auto-closed.'
+        simple: 'KOI triage: Benign — extension ${KoiContext.item_id} at alert risk level ${KoiContext.risk_level}, not blocklisted. Auto-closed. Org inventory risk was "${KoiTriage.org_risk_level}"; if that is blank the org inventory lookup was INCONCLUSIVE (the inventory index lags the event stream and a freshly-alerted item is often not indexed yet), not evidence that the organization does not have this item. KOI notification id ${KoiContext.notification_id}.'
     nexttasks:
       '#none#':
       - '23'
@@ -1078,7 +1512,7 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 1080, "x": 60, "y": 20}}}'
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 1650, "x": 60, "y": 20}}}'
 inputs:
 - key: instance_name
   value: {}
@@ -1089,7 +1523,18 @@ inputs:
   value:
     simple: high,critical
   required: false
-  description: Comma-separated risk levels the device investigation flags as risky. Vocabulary - low, medium, high, critical, pending.
+  description: Comma-separated risk levels the device investigation flags as risky. Vocabulary - low, medium, high, critical, pending. All five occur on live data.
+  playbookInputQuery: null
+- key: dedupe_alert_field
+  value: {}
+  required: false
+  description: 'Machine name of the ALERT FIELD that carries the KOI notification id (metadata.notification_event_id / the koi_notification_id column promoted by this pack''s parsing rule). Set this and the playbook suppresses duplicate KOI deliveries: the second and later alerts for the same notification are closed as duplicates instead of being investigated again. LEAVE IT EMPTY AND SUPPRESSION IS OFF - the playbook then triages every delivery, which on live data is up to 245 investigations of one real alert. There is no default because the field''s machine name is created by your correlation rule''s field mapping, not by this pack; see the DUPLICATE ALERTS section of the playbook description for how to create it. Example value - koinotificationid.'
+  playbookInputQuery: null
+- key: dedupe_lookback
+  value:
+    simple: 3 days
+  required: false
+  description: How far back to look for an earlier alert carrying the same KOI notification id. Must be at least as long as KOI keeps re-sending one alert; the longest re-send run observed on live data is 6.8 hours (408 deliveries, one per minute). Only used when dedupe_alert_field is set.
   playbookInputQuery: null
 outputs:
 - contextPath: KoiTriage.verdict
@@ -1099,7 +1544,7 @@ outputs:
   description: The markdown triage summary.
   type: string
 - contextPath: KoiTriage.org_risk_level
-  description: The organization's inventory risk level for the alerted item (signal C).
+  description: The organization's inventory risk level for the alerted item (signal C). Empty is inconclusive (no record yet / index lag), not an absence.
   type: string
 - contextPath: KoiTriage.org_risk_score
   description: The organization's numeric inventory risk score for the alerted item, captured alongside signal C.
@@ -1109,6 +1554,15 @@ outputs:
   type: string
 - contextPath: KoiTriage.blocklisted_item
   description: The alerted item_id when it is already on the org blocklist, otherwise empty (signal D).
+  type: string
+- contextPath: KoiTriage.dedupe_state
+  description: 'Outcome of the duplicate-suppression gate: "first delivery of this KOI notification id", or "not evaluated ..." when the gate could not run. When the alert is a re-delivery the playbook closes it and never reaches this output.'
+  type: string
+- contextPath: KoiTriage.duplicate_of
+  description: Comma-separated ids of earlier alerts already created for the same KOI notification id. Non-empty means this alert is a re-delivery and was closed without investigation.
+  type: string
+- contextPath: KoiTriage.self_alert_id
+  description: This alert's own id, used to exclude it from the duplicate search. Empty means ${alert.id} did not resolve and duplicate suppression was skipped.
   type: string
 tags:
 - koi

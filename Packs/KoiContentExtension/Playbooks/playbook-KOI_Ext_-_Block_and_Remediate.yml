@@ -26,13 +26,20 @@ description: |-
   KoiBlock.status = "Blocked" therefore means "the add call returned without an error", not
   "the API confirmed a new blocklist entry". Re-run koi-blocklist-get if you need proof.
 
-  MARKETPLACE IS LOAD-BEARING. koi-blocklist-items-add takes item_id + marketplace as a pair
-  ("required when not using items_list_raw_json_entry_id"), and the alert payload does not
-  always carry one — on live data item.marketplace is present on 296 of 314 alerts and is
-  absent on every MCP-server alert. When marketplace is not supplied, this playbook resolves
-  it from koi-inventory-list(item_id=<id>, limit=1) -> Koi.Inventory.marketplace. If it is
-  still unknown at the write step the block is SKIPPED rather than attempted, so a malformed
-  call is never made.
+  MARKETPLACE IS LOAD-BEARING, AND IT IS USUALLY MISSING NOW. koi-blocklist-items-add takes
+  item_id + marketplace as a pair ("required when not using items_list_raw_json_entry_id"),
+  and the alert payload frequently does not carry one. Live, 90 days to 2026-07-21, counted
+  per ALERT OCCURRENCE (not per row — the Alerts stream is duplicated, see
+  KOI Ext - Alert Triage): item.marketplace is present on all 296 extension alerts and absent
+  on all 21 mcp_server alerts. Because no extension alert has arrived since 2026-07-09,
+  marketplace is currently absent on effectively 100% of ingestion — SO THE SKIP PATH BELOW
+  IS THE MAIN PATH, NOT AN EDGE CASE. When marketplace is not supplied this playbook resolves
+  it from koi-inventory-list(item_id=<id>, limit=1) -> Koi.Inventory.marketplace, which for a
+  freshly-alerted item often also returns nothing because the inventory index lags the event
+  stream (VERIFIED_FACTS 7d.3) — that is INCONCLUSIVE, not proof the item is unknown. If
+  marketplace is still unknown at the write step the block is SKIPPED rather than attempted,
+  so a malformed call is never made. Expect to skip; an analyst then blocks from the KOI
+  console, or waits for the item to be indexed and re-runs.
 
   VOCABULARY MAPPING - WHY TASKS 18-21 EXIST (VERIFIED_FACTS 7c). The marketplace a KOI event
   carries is NOT the value the KOI API accepts: events use short forms (software_windows,
@@ -454,7 +461,7 @@ tasks:
       id: koiexblk-0000-4000-8000-000000000016
       version: -1
       name: Is the item addressable?
-      description: Last guard before the write. koi-blocklist-items-add needs item_id AND marketplace; if marketplace could not be resolved - not supplied, no API equivalent for the value supplied, and not recoverable from the org inventory - the block is skipped rather than attempted with a half-formed call that would return HTTP 400. This guard sits AFTER the approval gate so it can never be used to bypass it.
+      description: 'Last guard before the write. koi-blocklist-items-add needs item_id AND marketplace; if marketplace could not be resolved - not supplied, no API equivalent for the value supplied, and not recoverable from the org inventory - the block is skipped rather than attempted with a half-formed call that would return HTTP 400. ON CURRENT DATA THIS IS THE LIKELY OUTCOME: no mcp_server alert carries a marketplace and mcp_server is effectively all of today''s ingestion, while the inventory fallback returns nothing for an item the index has not caught up with yet. A skip means the block COULD NOT BE ATTEMPTED - it is not a decision that the item is safe. This guard sits AFTER the approval gate so it can never be used to bypass it.'
       iscommand: false
       brand: ''
       type: condition

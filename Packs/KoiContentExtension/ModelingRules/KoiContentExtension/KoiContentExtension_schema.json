@@ -6,6 +6,7 @@
         "finding_info": {"type": "string", "is_array": false},
         "resources": {"type": "string", "is_array": false},
         "observables": {"type": "string", "is_array": false},
+        "metadata": {"type": "string", "is_array": false},
 
         "message": {"type": "string", "is_array": false},
         "severity": {"type": "string", "is_array": false},

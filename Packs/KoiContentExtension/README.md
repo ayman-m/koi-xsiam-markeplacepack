@@ -57,25 +57,43 @@ These matter more than anything else in this README.
 A parsing rule runs as events arrive. **Rows already in `koi_koi_raw` are never reprocessed.**
 
 Consequence: every column this pack's parsing rule promotes (`item_id`, `item_type`,
-`item_marketplace`, `item_risk_level`, `item_package_name`, `item_criticality`, `device_id`,
-`device_os_obs`, `device_serial`, `device_last_seen`, `device_last_user`, `device_status`,
-`device_registered_at`, `alert_hostname`, `alert_type`, `finding_uid`, `finding_title`,
-`finding_created_time`, `koi_event_id`, and the `mcp_*` family) stays **null on all historical
-data**. Dashboard widgets and modeling-rule mappings that depend on those columns are **empty until
-fresh events arrive after installation**. Roughly half the dashboard's widgets (26 of 52) read
-promoted columns; the rest read raw OCSF columns and JSON inside `resources` / `observables` and
-work against historical rows immediately.
+`item_marketplace`, `item_marketplace_api`, `item_risk_level`, `item_package_name`,
+`item_criticality`, `device_id`, `device_os_obs`, `device_serial`, `device_last_seen`,
+`device_last_user`, `device_status`, `device_registered_at`, `alert_hostname`, `alert_type`,
+`alert_item_version`, `finding_uid`, `finding_title`, `finding_created_time`, `koi_event_id`,
+**`koi_notification_id`**, **`koi_product_version`**, and the `mcp_*` family — 31 Alert columns in
+all, plus `marketplace_api` on Audit) stays **null on all historical data**. Modeling-rule mappings
+that depend on those columns are **empty until fresh events arrive after installation**.
+
+The dashboard is built not to have that problem. Measured directly from
+`XSIAMDashboards/KoiContentExtension_Alerts_Dashboard.json`: of its **53** widgets, **25 never
+reference a promoted column at all**, and the other **28 re-derive every promoted column they use
+inline** from the raw `resources` / `observables` / `metadata` JSON — usually as
+`alter <col> = coalesce(<promoted column>, <guarded raw read>)`. **Zero widgets depend on a
+promoted column with no inline fallback**, so all 53 render against historical rows and keep
+working after the parsing rule lands. The same reasoning applies to dedupe: 42 widgets read
+`notification_event_id` inline out of `metadata` rather than the promoted `koi_notification_id`,
+for exactly this reason.
 
 Do not diagnose this as a broken rule. Wait for a fetch cycle, then re-check.
 
 ### 2. The parsing rule and the modeling rule must be deployed together
 
 The modeling rule's Alerts block reads columns that exist **only because the parsing rule promoted
-them at ingest**. Deployed alone, 16 of its Alerts mappings silently resolve to null — including
-`xdm.event.id`, `xdm.alert.name`, the entire host block and the entire resource block. It will not
-error; it will map nulls.
+them at ingest**. Deployed alone, **12 of its 20 Alerts mappings** silently resolve to null —
+`xdm.event.type`, `xdm.alert.name`, the entire host block (`device_id` / `hostname` / `os` /
+`os_family`), `xdm.source.user.username` and the entire resource block (`id` / `name` / `type` /
+`sub_type`). It will not error; it will map nulls.
 
-(The modeling rule's Audit block reads only raw fields and is standalone.)
+The 8 that survive are `xdm.event.id`, `xdm.alert.description`, `xdm.alert.severity`,
+`xdm.alert.subcategory` and the observer block. **`xdm.event.id` is not affected** — it maps
+`_id`, an XSIAM-internal column that is present whether or not the parsing rule is deployed. (An
+earlier version of this README listed it among the casualties and gave the figure as 16; both were
+wrong. Corrected 21 July 2026 against the modeling rule's own header.)
+
+The modeling rule's Audit block is **very nearly** standalone, not fully: it reads raw fields for
+everything except `xdm.target.resource.sub_type`, which reads `marketplace_api` — a parsing-rule
+column. So the Audit block needs the parsing rule too, for that one mapping.
 
 ### 3. Forward risk that no rename can prevent
 
@@ -90,12 +108,12 @@ avoids this. Before upgrading the KOI pack, check its release notes for new `Par
 
 ### 4. `alert_type` is not a triage discriminator here
 
-Two separate facts, both live-verified over 90 days on a real tenant:
+Two separate facts, both live-verified over 90 days on a real tenant (21 July 2026):
 
 - The **raw** `alert_type` column in `koi_koi_raw` is never populated — `filter alert_type != null`
   returns zero rows.
 - The `alert_type` this pack's parsing rule promotes (from `finding_info.types[0]`) has **exactly
-  one distinct value across all 314 alert rows: `policy_violation`**.
+  one distinct value across all 1,048 alert rows: `policy_violation`**.
 
 So nothing in this pack branches on `alert_type`, and neither should anything you build on top of
 it. It is promoted and mapped to `xdm.event.type` for completeness only. Content ported from the
@@ -166,6 +184,39 @@ static table would silently drop a marketplace KOI adds to the API later. An unm
 **empty**, which every playbook recovers from with `koi-inventory-list item_id=… limit=1`; a wrong
 value is an unrecoverable 400.
 
+### 8. 🚨 An Alerts row is a fetch, not an alert — always dedupe
+
+The Marketplace integration re-sends every **still-open** alert on every fetch cycle
+(`eventFetchInterval` = 1 minute), so `koi_koi_raw` holds one row per alert **per fetch**. Measured
+21 July 2026 on the validation tenant:
+
+| Stream | Window | Rows | Distinct notifications | Inflation |
+|---|---|---|---|---|
+| Alerts | last 24 h | 734 | **3** | **≈245×** |
+| Alerts | last 90 d | 1,048 | 317 | ≈3.3× |
+| Audit | last 90 d | 20,148 | 20,148 | 1.0 — none |
+
+Audit is unaffected; this is an Alerts-only defect, and it is a property of the integration, not of
+this pack. The duplication is also not uniform — over 90 days the 296 `extension` rows carry 296
+distinct notifications (no duplication at all) while the `mcp_server` rows carry 21, because those
+are the alerts that stay open.
+
+The parsing rule promotes **`koi_notification_id`** from `metadata.notification_event_id` as the
+only correct dedupe key: 317 distinct across the 1,048 rows, and a verified 1:1 identity for
+`(item.id, device.id, finding_info.uid, finding_info.created_time)`. `koi_event_id` (20 distinct)
+is the scan batch and `finding_uid` (3 distinct) is the policy — neither is an alert identity.
+
+Consequences you must handle yourself:
+
+- **Anything counting alerts must use `count_distinct(koi_notification_id)`.** A plain `count()` is
+  wrong by two orders of magnitude — 734 versus 3 on a 24-hour window.
+- **On historical rows the promoted column is null** (caveat 1), so dedupe there with
+  `json_extract_scalar(metadata, "$.notification_event_id")` inline. That is what the dashboard
+  widgets do.
+- **XDM cannot express this.** There is no "this is a duplicate" field, so the modeling rule cannot
+  fix it and every consumer has to.
+- `KOI Ext - Alert Triage` carries a duplicate-suppression gate for exactly this reason.
+
 ---
 
 ## What this pack ships
@@ -174,20 +225,35 @@ value is an unrecoverable 400.
 
 `[INGEST:vendor="koi", product="koi", target_dataset="koi_koi_raw", no_hit=keep]`
 
-Promotes ~29 columns out of the JSON-string `resources` / `observables` / `finding_info` blobs, and
-sets `_time` on Audit rows from `created_at` (guarded — `created_at` is null on 100% of alert rows).
-Extraction is **coalesce-by-`.type`**, never a fixed array index: `resources[0].type` is `item` on
-296 alerts but `mcp` on 18, so a fixed index would misattribute MCP-server values to items.
+Promotes **31** columns out of the JSON-string `metadata` / `resources` / `observables` /
+`finding_info` blobs (29 plus **`koi_notification_id`** and **`koi_product_version`**, both added
+by the duplication fix), and sets `_time` on Audit rows from `created_at` (guarded — `created_at`
+is null on 100% of alert rows). Extraction is **coalesce-by-`.type`**, never a fixed array index:
+over 90 days `resources[0].type` is `item` on the 296 `extension` rows but `mcp` on the 842
+`mcp_server` rows (21 July 2026), so a fixed index would misattribute MCP-server values to items —
+and the split moves as the population shifts.
+
+`koi_notification_id` (from `metadata.notification_event_id`) is the dedupe key described in
+caveat 8. `koi_product_version` is a change detector, not an analytic dimension: it is the constant
+`1.7.0` today, and the day it stops reading `1.7.0` every extraction in the rule is worth
+re-validating.
 
 ### Modeling rule — `KoiContentExtension`
 
 `[MODEL: dataset=koi_koi_raw]`, one block for `source_log_type = "Alerts"` and one for `"Audit"`,
 mapping to the Cortex Data Model. Requires the parsing rule (see caveat 2).
 
+Two fields are deliberately **unmapped**, both removed 21 July 2026 after live measurement, both
+carrying a DO-NOT-RE-ADD comment in the rule: `xdm.alert.original_alert_id` (was `finding_uid` — a
+policy id, 3 distinct values across 1,040 alerts) and `xdm.target.host.fqdn` (was `alert_hostname`
+— contains a dot on 0 of 1,138 rows, so it is a bare name, not an FQDN).
+
 ### Dashboard — `KOI Content Extension - Alerts Dashboard`
 
-52 widgets across 24 layout rows, all on a 30-day relative window. All widgets query `koi_koi_raw`
-directly; none reference `xdm.*`, so the dashboard does not depend on the modeling rule.
+**53 widgets across 25 layout rows** (counted from the dashboard JSON), all on a 30-day relative
+window. The 53rd is the duplication monitor added with the dedupe fix. All widgets query
+`koi_koi_raw` directly; none reference `xdm.*`, so the dashboard does not depend on the modeling
+rule, and none depends on a promoted column without an inline raw fallback (see caveat 1).
 
 ### Playbooks (10)
 
@@ -245,5 +311,13 @@ Command names, arguments and context paths in this pack were verified against
 `demisto/content@master → Packs/Koi/Integrations/Koi/Koi.yml` (v1.2.3), not from memory. The
 dataset name `koi_koi_raw`, the array-length bounds in the parsing rule, the
 `resources[0].type ∈ {item, mcp}` split, and the `alert_type` cardinality were verified on a live
-tenant (`api-ayman.xdr.eu.paloaltonetworks.com`, July 2026) over 314 alert rows and ~20,215 audit
-rows across 90 days.
+tenant (`api-ayman.xdr.eu.paloaltonetworks.com`) over **1,048 alert rows and 20,148 audit rows
+across 90 days, measured 21 July 2026**.
+
+**Every live figure in this pack carries that measurement date, and it is the same date
+everywhere.** The dataset grows on every fetch cycle, so an undated figure is not reproducible and
+a re-measurement will not match. Cohort counts (296 `extension` / 842 `mcp_server`) and
+whole-stream counts (1,048 rows) came from separate queries minutes apart and do not sum exactly;
+that is the window moving, not a contradiction. The canonical set is recorded in
+`VERIFIED_FACTS.md` §7e / §7f — quote from there, and do not restate a measurement with a
+different value in another file.

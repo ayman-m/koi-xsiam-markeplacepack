@@ -38,10 +38,13 @@ description: |-
 
   WHAT THIS VERSION CANNOT TELL YOU - state this to any analyst using it
   - No catalog / vendor-wide risk. Risk here is ORG-LOCAL: it comes from the organization's
-    own inventory record. An item that is not installed anywhere in the org returns NO
-    inventory record at all, so risk, publisher, signing and installs all come back empty -
-    for exactly the newly-appeared item an alert is most likely to be about. Empty risk is
-    not low risk.
+    own inventory record. An empty result has TWO indistinguishable causes: nobody in the
+    org has the item, OR the inventory index has not caught up with the event stream yet.
+    Items visible in koi_koi_raw at 06:06:06 were still returning total_count 0 from the
+    inventory API at 06:21, and koi-inventory-item-endpoints-list returned HTTP 404 for them
+    (VERIFIED_FACTS 7d.3). An empty lookup is therefore INCONCLUSIVE / NOT YET INDEXED and
+    must never be reported as "not present in the organization" - least of all for the
+    newly-appeared item an alert is most likely to be about. Empty risk is not low risk.
   - No AI risk summary.
   - No remediation history - you cannot answer "has KOI ever remediated this item".
   - No approval history - you cannot answer "was this item ever requested or approved".
@@ -293,7 +296,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000027
       version: -1
       name: Use the org inventory version
-      description: Falls back to Koi.Inventory.version. Stays empty when the item is not in the org's inventory, which gates the endpoint lookup below.
+      description: 'Falls back to Koi.Inventory.version. Stays empty when the org inventory returned no record for the item - which means either nobody has it or the inventory index has not caught up with the alert yet. Either way the endpoint lookup below is gated off, and the correct report is "inconclusive", not "not installed".'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -334,7 +337,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000028
       version: -1
       name: Is a usable marketplace known?
-      description: 'Tests the MAPPED value (Inv.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a REQUIRED argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 18 MCP alerts), or the value they supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to the org inventory record, whose Koi.Inventory.marketplace is a COMMAND output and is already API-canonical - it is used as-is and never re-mapped.'
+      description: 'Tests the MAPPED value (Inv.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a REQUIRED argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 21 mcp_server alerts, and no extension alert has arrived since 2026-07-09, so an EMPTY MARKETPLACE IS NOW THE COMMON CASE rather than the exception), or the value they supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to the org inventory record, whose Koi.Inventory.marketplace is a COMMAND output and is already API-canonical - it is used as-is and never re-mapped.'
       iscommand: false
       brand: ''
       type: condition
@@ -445,7 +448,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000004
       version: -1
       name: Are a version AND a marketplace known?
-      description: 'koi-inventory-item-endpoints-list requires item_id AND marketplace AND version on this pack, so BOTH are checked: neither a missing version nor a missing marketplace can produce a usable call, and an unknown (item_id, marketplace, version) triple returns HTTP 404 rather than an empty 200 (VERIFIED_FACTS 7b). The lookup is skipped rather than run and failed. Marketplace is empty here when the caller supplied none, when the value they supplied has no API equivalent (ollama / built_in / side_loaded), and when the item is not in the org inventory. A "no" normally means the item is not installed anywhere in the organization - endpoint and user exposure will legitimately be empty.'
+      description: 'koi-inventory-item-endpoints-list requires item_id AND marketplace AND version on this pack, so BOTH are checked: neither a missing version nor a missing marketplace can produce a usable call, and an unknown (item_id, marketplace, version) triple returns HTTP 404 rather than an empty 200 (VERIFIED_FACTS 7b). The lookup is skipped rather than run and failed. Marketplace is empty here when the caller supplied none, when the value they supplied has no API equivalent (ollama / built_in / side_loaded), and when the org inventory returned no record for the item. A "no" means the (item_id, marketplace, version) triple could not be completed - most often because the org inventory returned nothing, which is INCONCLUSIVE (no record, or the index has not caught up with the alert). Endpoint and user exposure are then unknown, not zero. Note that marketplace is now the usual reason: no mcp_server alert carries one, and mcp_server is effectively all current ingestion.'
       iscommand: false
       brand: ''
       type: condition
@@ -1180,10 +1183,11 @@ tasks:
           **Scope of this investigation (Marketplace KOI pack v1.2.3):** org-local risk only.
           No catalog / vendor-wide risk, no AI risk summary, no remediation history and no
           approval history are available - the commands that provided them do not exist in
-          this pack. An item that is not installed anywhere in the organization returns no
-          inventory record, so every field above comes back empty for it. **Empty is not low
-          risk** - it means "not seen in this organization", which for a freshly-appeared
-          item is the alerting condition itself.
+          this pack. **If every field above is blank the result is INCONCLUSIVE, not an
+          absence.** The org inventory index lags the KOI event stream, so an item that has
+          just alerted routinely has no inventory record YET; a blank row means "KOI's
+          inventory has not answered for this item", not "the organization does not have it",
+          and certainly not "it is low risk".
       append:
         simple: 'false'
     nexttasks:

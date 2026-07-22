@@ -27,9 +27,13 @@ description: |-
   CAPABILITY DELTA - read this before trusting the numbers
   - Risk is now ORG-LOCAL, not catalog/vendor risk. koi-koidex-risk-report queried the KOI
     catalog for any item whether or not the org ran it. koi-inventory-list returns only the
-    organization's inventory record, so an item nobody in the org has installed produces NO
-    row: risk_level, risk_score, version and marketplace all come back empty. That is the
-    normal, expected outcome for a newly-appeared item - not an error.
+    organization's inventory record, so risk_level, risk_score, version and marketplace come
+    back empty both when nobody in the org has the item AND when the inventory index has
+    simply not caught up with the event stream (VERIFIED_FACTS 7d.3: items present in events
+    at 06:06 were still returning total_count 0 from the inventory API at 06:21). The two are
+    indistinguishable from here, so an empty enrichment is INCONCLUSIVE / NOT YET INDEXED -
+    it is the normal, expected outcome for a newly-appeared item, and it is never evidence
+    that the organization does not have the item.
   - There is no AI risk summary and no Koidex compliance block anywhere in the 13 commands.
   - Because version is resolved from the org record, an org running a different version than
     the one that triggered an alert is enriched at the ORG's version. Pass the alert's
@@ -204,7 +208,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000004
       version: -1
       name: Use the org inventory version
-      description: Falls back to Koi.Inventory.version from the lookup above. If the item is not in the org's inventory this stays empty and the endpoints call below will fail its required-argument check - that is handled by continue-on-error and is the expected outcome for an item nobody has installed.
+      description: 'Falls back to Koi.Inventory.version from the lookup above. If the org inventory returned no record this stays empty and the endpoints call below is skipped - handled by continue-on-error. An empty org record is INCONCLUSIVE: either nobody has the item, or the inventory index has not caught up with the event that alerted on it (VERIFIED_FACTS 7d.3). Do not report it as "nobody has installed this".'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -245,7 +249,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000005
       version: -1
       name: Is a usable marketplace known?
-      description: 'Tests the MAPPED value (Enr.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a required argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 18 MCP alerts), or the value supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to Koi.Inventory.marketplace, a COMMAND output that is already API-canonical and is used as-is.'
+      description: 'Tests the MAPPED value (Enr.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a required argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 21 mcp_server alerts, and no extension alert has arrived since 2026-07-09, so an EMPTY MARKETPLACE IS NOW THE COMMON CASE rather than the exception), or the value supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to Koi.Inventory.marketplace, a COMMAND output that is already API-canonical and is used as-is.'
       iscommand: false
       brand: ''
       type: condition
@@ -470,7 +474,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000011
       version: -1
       name: Record org risk level
-      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level. This is the ORGANIZATION''s risk level for the item, not the KOI catalog''s. Empty means the item is not in the org inventory, not that it is safe.'
+      description: 'SUBSTITUTION: Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level. This is the ORGANIZATION''s risk level for the item, not the KOI catalog''s. Empty means the org inventory returned no record - either nobody has the item, or the index has not caught up with the event that alerted on it - so it is INCONCLUSIVE. It does not mean the item is safe, and it does not mean the organization does not have it.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -850,7 +854,7 @@ tasks:
       id: koixen00-0000-4000-8000-000000000021
       version: -1
       name: Are a version AND a marketplace known?
-      description: 'koi-inventory-item-endpoints-list requires item_id AND marketplace AND version, all three. Neither an empty version nor an empty marketplace can produce a usable call, and an unknown (item_id, marketplace, version) triple returns HTTP 404 rather than an empty 200 (VERIFIED_FACTS 7b) - so the call is skipped rather than made and failed. Marketplace is empty when the caller supplied none, when the value they supplied has no API equivalent (ollama / built_in / side_loaded), and when the item is not in the org inventory. A "no" here normally means the item is not installed anywhere in the organization; endpoint exposure is then legitimately empty, which is what task 9 reports.'
+      description: 'koi-inventory-item-endpoints-list requires item_id AND marketplace AND version, all three. Neither an empty version nor an empty marketplace can produce a usable call, and an unknown (item_id, marketplace, version) triple returns HTTP 404 rather than an empty 200 (VERIFIED_FACTS 7b) - so the call is skipped rather than made and failed. Marketplace is empty when the caller supplied none (no mcp_server alert carries one, and mcp_server is effectively all current ingestion - so this is the COMMON path now), when the value supplied has no API equivalent (ollama / built_in / side_loaded), and when the org inventory returned no record. A "no" here means endpoint exposure is UNKNOWN, not zero: the org inventory may simply not have indexed the item yet.'
       iscommand: false
       brand: ''
       type: condition
