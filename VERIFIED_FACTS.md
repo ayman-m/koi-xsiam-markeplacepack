@@ -565,6 +565,20 @@ Two things worth noting for content design:
 End-to-end timing across all runs in this session: scan completes → events queryable in
 `koi_koi_raw` in roughly **4–10 minutes**.
 
+### 7d.2c MCP config-only declaration did not register within 40 min **[LIVE, qualified]**
+
+Wrote benign MCP server declarations (`@modelcontextprotocol/server-filesystem`, `-everything`) to
+`C:\Users\amahmoud\.cursor\mcp.json` and `…\AppData\Roaming\Claude\claude_desktop_config.json`, then
+scanned. **No MCP-server inventory event and no `mcp_servers` count change after 40 minutes.**
+
+Do not over-read this. The box has **no Cursor and no Claude client installed** (node/npm are
+absent), so the most likely explanations are (a) KOI attributes an MCP server to an installed,
+recognised client rather than to an orphan config file, or (b) MCP discovery runs on a slower
+cadence than software/PyPI/git inventory. Not distinguished here. It is **not** established that
+KOI ignores MCP configs generally — only that a config file with no corresponding client did not
+produce a result in this window. Bears on the customer question "does Koi see an MCP server merely
+declared vs actually present": on this evidence, declaration alone was insufficient.
+
 ### 7d.2a Git repositories are a discovered surface **[LIVE]**
 
 A `git clone` into a user profile is inventoried as a first-class item:
