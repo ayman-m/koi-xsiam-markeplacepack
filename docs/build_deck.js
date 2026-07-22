@@ -203,6 +203,42 @@ const INSTALL_METHODS = argOf("koi-inventory-list", "installation_method").prede
    these three are absent from the YAML dropdown. [LIVE] */
 const VIEWS_API_ONLY = ["all_items", "mcp_servers", "repositories"];
 
+/* VERIFIED_FACTS.md §7c — the marketplace vocabularies differ. [LIVE, 21 Jul 2026]
+   The `marketplace` field in koi_koi_raw events uses SHORT forms; the command
+   argument (and the YAML predefined list) uses LONG forms. Only npm and pypi are
+   spelled the same in both. Pass an event value straight to a command -> HTTP 400.
+   This is a representative subset of the 20-value §7c table, chosen to show all
+   three cases: an unchanged match, a short->long rename, and a value with NO API
+   equivalent. [event short form, API/YAML long form or null, events seen in §7c]. */
+const MARKETPLACE_MAP = [
+  ["software_windows", "windows", 5301],
+  ["pypi", "pypi", 4674],
+  ["chrome", "chrome_web_store", 891],
+  ["built_in", null, 829],
+  ["npm", "npm", 775],
+  ["software_mac", "mac", 617],
+  ["vsc", "vscode", 175],
+  ["edge", "edge_add_ons", 48],
+  ["ollama", null, 5],
+  ["side_loaded", null, 1],
+];
+/* Tie the live mapping back to the YAML-derived enum: every non-null long form it
+   maps TO must be a value the command actually accepts, or the build fails. */
+assert(
+  MARKETPLACE_MAP.filter(([, api]) => api).every(([, api]) => MARKETPLACES.includes(api)),
+  "a mapped API marketplace value is not in the marketplace enum (marketplace-pack.json)"
+);
+/* Only npm and pypi are unchanged between the two vocabularies — VERIFIED_FACTS §7c. */
+const marketplaceUnchanged = MARKETPLACE_MAP.filter(([ev, api]) => ev === api).map(([ev]) => ev);
+assert(
+  marketplaceUnchanged.length === 2 && marketplaceUnchanged.every((v) => v === "npm" || v === "pypi"),
+  "only npm and pypi should be spelled the same in the event and API marketplace vocabularies (§7c)"
+);
+/* The three values that leak in / have no marketplace meaning — §7c: built_in and
+   side_loaded are installation_method values, ollama is simply not in the API list. */
+const marketplaceNoEquiv = MARKETPLACE_MAP.filter(([, api]) => !api).map(([ev]) => ev);
+assert(marketplaceNoEquiv.length === 3, "expected 3 event marketplace values with no API equivalent (§7c)");
+
 /* EDITORIAL: the families below are a reading aid. Every token inside them is
    verbatim from the marketplace enum above; the grouping into families is mine.
    The assertion guarantees the families stay a complete, non-overlapping partition. */
@@ -225,6 +261,39 @@ assert(new Set(famTokens).size === famTokens.length, "family partition has a dup
 assert(
   famTokens.every((t) => MARKETPLACES.includes(t)),
   "a family token is not in the marketplace enum"
+);
+
+/* ============================================================================
+   0b. THE OPTIONAL COMPANION PACK — KoiContentExtension
+   Read at build time from Packs/KoiContentExtension so its component counts are
+   NOT hand-typed. This pack is SEPARATE, additional content: it is not part of the
+   Marketplace KOI pack, and it is not the conflicting custom v1.3.0 pack either.
+   It ships no integration and no commands of its own; it layers rules, playbooks
+   and a dashboard on top of the installed KOI integration. Referenced in
+   VERIFIED_FACTS §7a/§7c/§7d (the "KOI Ext -" playbooks) and delivered here.
+   ========================================================================== */
+const EXT_DIR = path.join(__dirname, "..", "Packs", "KoiContentExtension");
+const EXT = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "pack_metadata.json"), "utf8"));
+const EXT_ID = path.basename(EXT_DIR); // "KoiContentExtension"
+const extPlaybooks = fs
+  .readdirSync(path.join(EXT_DIR, "Playbooks"))
+  .filter((f) => /^playbook-.*\.yml$/.test(f));
+const extDashboards = fs
+  .readdirSync(path.join(EXT_DIR, "XSIAMDashboards"))
+  .filter((f) => /\.json$/.test(f));
+const nExtPlaybooks = extPlaybooks.length;
+const nExtDashboards = extDashboards.length;
+const extHasParsing = fs.existsSync(path.join(EXT_DIR, "ParsingRules"));
+const extHasModeling = fs.existsSync(path.join(EXT_DIR, "ModelingRules"));
+assert(nExtPlaybooks === 10, "expected 10 companion-pack playbooks (task brief / on-disk pack)");
+assert(nExtDashboards === 1, "expected exactly one companion-pack dashboard");
+assert(extHasParsing && extHasModeling, "companion pack must ship parsing AND modeling rules");
+assert(EXT.name === "KOI Content Extension", "companion pack display name changed");
+/* It must depend on the KOI pack and add no commands of its own — that is what makes
+   it "additional content on top of", not a replacement for, the Marketplace pack. */
+assert(
+  EXT.dependencies && EXT.dependencies.Koi && EXT.dependencies.Koi.mandatory === true,
+  "companion pack must declare a mandatory dependency on the KOI pack"
 );
 
 /* ============================================================================
@@ -254,7 +323,9 @@ const W = 13.3 - M * 2; // 12.1
 
 const FOOTER = `Marketplace KOI pack v${PACK.pack.currentVersion}  ·  ${PACK.source.repo} / ${PACK.source.path.split("/Integrations")[0]}  ·  integration only, ${nCommands} commands  ·  not the custom v1.3.0 pack`;
 
+let SLIDE_COUNT = 0;
 const newSlide = (footer = true) => {
+  SLIDE_COUNT += 1;
   const s = pres.addSlide();
   s.background = { color: BG };
   if (footer)
@@ -401,14 +472,18 @@ const sourceTag = (s, text, y = 6.62) =>
     s.addText(l, { x, y: 5.72, w: 2.2, h: 0.3, fontSize: 11, color: MUTED, fontFace: F, margin: 0 });
   });
   s.addText(
-    "This is the Marketplace pack. A different, in-house KOI pack (v1.3.0, 26 commands) also exists and cannot coexist with it — see the comparison slide.",
-    { x: M, y: 6.34, w: W, h: 0.5, fontSize: 10.5, italic: true, color: AMBER, fontFace: F, margin: 0, lineSpacing: 13 }
+    [
+      { text: "This is the Marketplace pack. A different, in-house KOI pack (v1.3.0, 26 commands) cannot coexist with it — one overwrites the other; see the comparison slide.", options: { color: AMBER, italic: true, fontSize: 10, breakLine: true } },
+      { text: `Separately — and additively — an optional companion pack ${EXT_ID} ("${EXT.name}") layers parsing & modeling rules, ${nExtPlaybooks} playbooks and a dashboard on top of this integration. It is additional content, not part of this pack.`, options: { color: GREEN, italic: true, fontSize: 10 } },
+    ],
+    { x: M, y: 6.14, w: W, h: 0.78, fontFace: F, margin: 0, lineSpacing: 12.5, valign: "top" }
   );
   s.addText(FOOTER, { x: M, y: 7.02, w: W, h: 0.26, fontSize: 8, color: MUTED, fontFace: F, margin: 0 });
   s.addNotes(
     `Overview of the OFFICIAL Marketplace KOI pack, ${PACK.source.repo}/${PACK.source.path}, version ${PACK.pack.currentVersion}. ` +
       `Integration only: ${nCommands} commands, ${PACK.contextPrefixes.length} context prefixes, no playbooks, no parsing or modeling rules, no dashboard. ` +
-      `Command facts in this deck are generated at build time from the pinned YAML (md5 ${PACK.source.md5}).`
+      `Command facts in this deck are generated at build time from the pinned YAML (md5 ${PACK.source.md5}). ` +
+      `Two other packs get mentioned in this deck and must not be confused with each other: the custom in-house v1.3.0 pack, which CONFLICTS with this one (one overwrites the other), and ${EXT_ID} ("${EXT.name}", v${EXT.currentVersion}, ${EXT.support} support), an optional ADDITIVE companion that adds parsing & modeling rules, ${nExtPlaybooks} playbooks and a dashboard on top of this integration. The companion pack ships no integration and no commands of its own and depends on this pack being installed first.`
   );
 }
 
@@ -866,6 +941,124 @@ const sourceTag = (s, text, y = 6.62) =>
 }
 
 /* ============================================================================
+   SLIDE 6b — Know before you query (alert duplication + marketplace vocabulary)
+   VERIFIED_FACTS §7e (Alerts duplicated on every fetch) and §7c (event vs API
+   marketplace vocabularies). Both are [LIVE, 21 Jul 2026]. These two facts change
+   how EVERY koi_koi_raw query and every command-from-event call must be written,
+   so they get their own slide right after the event-collection slide.
+   ========================================================================== */
+{
+  const s = newSlide();
+  heading(s, "Know before you query", "Two things every koi_koi_raw query must handle");
+
+  const hw = (W - 0.4) / 2;
+  const cY = 1.50, cH = 4.72;
+
+  /* ---- LEFT: Alerts are duplicated on every fetch (§7e) ---- */
+  const lx = M;
+  card(s, lx, cY, hw, cH);
+  chip(s, lx + 0.24, cY + 0.20, "!", AMBER, 0.34);
+  s.addText("Alerts are massively duplicated", {
+    x: lx + 0.70, y: cY + 0.22, w: hw - 0.96, h: 0.32, fontSize: 14, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "middle",
+  });
+  s.addText("ALERTS ONLY — AUDIT IS NOT AFFECTED  ·  [LIVE] 21 JUL 2026", {
+    x: lx + 0.26, y: cY + 0.64, w: hw - 0.52, h: 0.24, fontSize: 8.5, bold: true, color: AMBER, fontFace: F, charSpacing: 1, margin: 0,
+  });
+  s.addText("244.7×", {
+    x: lx + 0.26, y: cY + 0.94, w: hw - 0.52, h: 0.72, fontSize: 42, bold: true, color: ORANGE, fontFace: F, margin: 0,
+  });
+  s.addText("inflation over the last 24 h — 734 rows resolve to just 3 distinct alerts", {
+    x: lx + 0.26, y: cY + 1.70, w: hw - 0.52, h: 0.26, fontSize: 10, color: MUTED, fontFace: F, margin: 0,
+  });
+  s.addText(
+    [
+      { text: "The integration re-sends every still-open alert on each 1-minute fetch, so ", options: { color: BODY, fontSize: 10 } },
+      { text: "koi_koi_raw holds one row per alert per fetch", options: { color: WHITE, bold: true, fontSize: 10 } },
+      { text: " — not one row per alert. Audit records are point-in-time and are ", options: { color: BODY, fontSize: 10 } },
+      { text: "not duplicated (1.0×).", options: { color: GREEN, bold: true, fontSize: 10 } },
+    ],
+    { x: lx + 0.26, y: cY + 2.06, w: hw - 0.52, h: 0.84, fontFace: F, margin: 0, lineSpacing: 13, valign: "top" }
+  );
+  card(s, lx + 0.26, cY + 2.98, hw - 0.52, 0.80, "0B0C0F");
+  s.addText("Dedupe every alert query on this inline key:", {
+    x: lx + 0.42, y: cY + 3.05, w: hw - 0.80, h: 0.22, fontSize: 8.5, color: MUTED, fontFace: F, margin: 0,
+  });
+  s.addText('json_extract_scalar(metadata, "$.notification_event_id")', {
+    x: lx + 0.42, y: cY + 3.28, w: hw - 0.80, h: 0.34, fontSize: 9.5, color: CYAN, fontFace: MONO, margin: 0, valign: "top",
+  });
+  s.addText(
+    [
+      { text: "Every ", options: { color: BODY, fontSize: 9.5 } },
+      { text: "count()", options: { color: AMBER, fontSize: 9.5, fontFace: MONO } },
+      { text: " over Alerts is wrong — use ", options: { color: BODY, fontSize: 9.5 } },
+      { text: "count_distinct", options: { color: WHITE, bold: true, fontSize: 9.5, fontFace: MONO } },
+      { text: " on that id. Today the difference is 734 versus 3.", options: { color: BODY, fontSize: 9.5 } },
+    ],
+    { x: lx + 0.26, y: cY + 3.92, w: hw - 0.52, h: 0.58, fontFace: F, margin: 0, lineSpacing: 12, valign: "top" }
+  );
+
+  /* ---- RIGHT: event vs API marketplace vocabulary (§7c) ---- */
+  const rx = M + hw + 0.4;
+  card(s, rx, cY, hw, cH);
+  chip(s, rx + 0.24, cY + 0.20, "!", CYAN, 0.34);
+  s.addText("Event vs API marketplace vocabulary", {
+    x: rx + 0.70, y: cY + 0.22, w: hw - 0.96, h: 0.32, fontSize: 14, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "middle",
+  });
+  s.addText("SHORT FORMS IN EVENTS · LONG FORMS IN THE COMMAND  ·  [LIVE] 21 JUL 2026", {
+    x: rx + 0.26, y: cY + 0.64, w: hw - 0.52, h: 0.24, fontSize: 8.5, bold: true, color: CYAN, fontFace: F, charSpacing: 1, margin: 0,
+  });
+  s.addText(
+    [
+      { text: "The marketplace field in events uses short forms; the command argument uses long forms. ", options: { color: BODY, fontSize: 10 } },
+      { text: "Only npm and pypi match.", options: { color: GREEN, bold: true, fontSize: 10 } },
+      { text: " An event value passed straight to a command returns ", options: { color: BODY, fontSize: 10 } },
+      { text: "HTTP 400", options: { color: AMBER, bold: true, fontSize: 10 } },
+      { text: " — map it first.", options: { color: BODY, fontSize: 10 } },
+    ],
+    { x: rx + 0.26, y: cY + 0.96, w: hw - 0.52, h: 0.74, fontFace: F, margin: 0, lineSpacing: 13, valign: "top" }
+  );
+  s.addText("event value (koi_koi_raw)".padEnd(26) + "command / API arg", {
+    x: rx + 0.26, y: cY + 1.74, w: hw - 0.52, h: 0.22, fontSize: 8.5, color: MUTED, fontFace: MONO, margin: 0,
+  });
+  const mapRuns = [];
+  MARKETPLACE_MAP.forEach(([ev, api], i) => {
+    const last = i === MARKETPLACE_MAP.length - 1;
+    const left = ev.padEnd(17);
+    if (api) {
+      mapRuns.push({ text: left, options: { color: BODY, fontSize: 9.5, fontFace: MONO } });
+      mapRuns.push({ text: "->  ", options: { color: ORANGE, fontSize: 9.5, fontFace: MONO } });
+      mapRuns.push({ text: api, options: { color: ev === api ? GREEN : CYAN, fontSize: 9.5, fontFace: MONO, breakLine: !last } });
+    } else {
+      mapRuns.push({ text: left, options: { color: AMBER, fontSize: 9.5, fontFace: MONO } });
+      mapRuns.push({ text: "->  none — not a marketplace", options: { color: MUTED, fontSize: 9.5, fontFace: MONO, breakLine: !last } });
+    }
+  });
+  s.addText(mapRuns, {
+    x: rx + 0.26, y: cY + 1.98, w: hw - 0.52, h: 1.86, margin: 0, lineSpacing: 12.5, valign: "top",
+  });
+  s.addText(
+    [
+      { text: "built_in · side_loaded · ollama", options: { color: AMBER, bold: true, fontSize: 9, fontFace: MONO } },
+      { text: " have no marketplace meaning — built_in and side_loaded are installation_method values leaking into the field. Treat them as unknown; never pass them on.", options: { color: MUTED, italic: true, fontSize: 9 } },
+    ],
+    { x: rx + 0.26, y: cY + 3.98, w: hw - 0.52, h: 0.62, fontFace: F, margin: 0, lineSpacing: 11.5, valign: "top" }
+  );
+
+  sourceTag(
+    s,
+    "Alert duplication and the dedupe key: VERIFIED_FACTS §7e [LIVE, 21 Jul 2026] — 734 rows -> 3 distinct alerts, 244.7×, are last-24h figures that keep growing, so read them as a snapshot, not a threshold.  Marketplace vocabulary and mapping: §7c [LIVE, 21 Jul 2026]; the long forms are validated at build time against the marketplace enum in marketplace-pack.json.",
+    6.60
+  );
+  s.addNotes(
+    "Two facts that change every query against koi_koi_raw. " +
+      "First, Alerts are duplicated: the integration re-sends every still-open alert on each 1-minute fetch, so the dataset holds one row per alert per fetch. Over the last 24 h that is 734 rows for 3 distinct alerts — 244.7×. Audit is point-in-time and unaffected (1.0×). " +
+      'The only correct dedupe key is metadata.notification_event_id, applied inline as json_extract_scalar(metadata, "$.notification_event_id"); every count() over Alerts must become count_distinct on that id. finding_uid is NOT an alert identity — it is the policy/finding definition, 3 distinct across 1,048 rows. ' +
+      "Second, the marketplace vocabularies differ: events use short forms (software_windows, chrome, vsc, ...), the command argument uses long forms (windows, chrome_web_store, vscode, ...). Only npm and pypi are spelled the same. Pass an event value to a command unmapped and it returns HTTP 400. " +
+      "built_in and side_loaded are installation_method values that leak into the marketplace field, and ollama is not in the API list at all — none of the three is a marketplace, so they must never be forwarded."
+  );
+}
+
+/* ============================================================================
    SLIDE 7 — Sharp edges
    ========================================================================== */
 {
@@ -1082,6 +1275,66 @@ const sourceTag = (s, text, y = 6.62) =>
 }
 
 /* ============================================================================
+   SLIDE 9b — The optional companion pack (KoiContentExtension)
+   The four work items on the previous slide ship, pre-built, as a SEPARATE
+   optional pack. Component counts are read at build time from
+   Packs/KoiContentExtension. Kept clearly distinct from the conflicting custom
+   v1.3.0 pack (slide 8): this one is additive and depends on the KOI pack.
+   ========================================================================== */
+{
+  const s = newSlide();
+  heading(s, "Optional add-on", "A companion pack fills the content layer");
+  s.addText(
+    [
+      { text: "Everything on the previous slide ships, pre-built, as a separate optional pack — ", options: { color: BODY, fontSize: 12 } },
+      { text: `${EXT_ID} ("${EXT.name}")`, options: { color: WHITE, bold: true, fontSize: 12 } },
+      { text: `, v${EXT.currentVersion}, ${EXT.support} support. It installs on top of this integration and normalises koi_koi_raw. It is additional content — not part of the Marketplace pack, and not the conflicting custom v1.3.0 pack.`, options: { color: BODY, fontSize: 12 } },
+    ],
+    { x: M, y: 1.42, w: 11.5, h: 0.56, fontFace: F, margin: 0, lineSpacing: 15, valign: "top" }
+  );
+
+  const comp = [
+    ["A", "Parsing & modeling rules", "Normalise the two koi_koi_raw schemas — flat Audit and OCSF Alerts — and map them to XDM, the layer this pack ships none of. Promote koi_notification_id so alerts can dedupe.", ORANGE],
+    ["B", `${nExtPlaybooks} playbooks`, "Alert Triage, Investigate Item / Device, Enrich Item, Block & Remediate, MCP Server Audit, plus the portable Script Runner set. Built strictly against this pack's 13 commands.", CYAN],
+    ["C", nExtDashboards === 1 ? "1 dashboard" : `${nExtDashboards} dashboards`, "An Alerts dashboard over koi_koi_raw — counting distinct notifications, not raw duplicated rows.", ORANGE],
+  ];
+  const cw = (W - 2 * 0.35) / 3;
+  comp.forEach(([n, t, d, c], i) => {
+    const x = M + i * (cw + 0.35);
+    card(s, x, 2.06, cw, 2.30);
+    chip(s, x + 0.26, 2.26, n, c, 0.34);
+    s.addText(t, { x: x + 0.72, y: 2.26, w: cw - 0.98, h: 0.34, fontSize: 14, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "middle" });
+    s.addText(d, { x: x + 0.26, y: 2.76, w: cw - 0.52, h: 1.44, fontSize: 10, color: BODY, fontFace: F, margin: 0, lineSpacing: 13, valign: "top" });
+  });
+
+  card(s, M, 4.58, W, 1.62, CARD_HI);
+  chip(s, M + 0.3, 4.82, "!", GREEN, 0.40);
+  s.addText("Separate, additional content", {
+    x: M + 0.92, y: 4.74, w: W - 1.3, h: 0.32, fontSize: 15, bold: true, color: WHITE, fontFace: F, margin: 0,
+  });
+  s.addText(
+    [
+      { text: `${EXT_ID} ("${EXT.name}") v${EXT.currentVersion} · ${EXT.support} support · author ${EXT.author}. Depends on the KOI pack — install this pack first. It ships no integration and no commands of its own. `, options: { color: BODY, fontSize: 10.5 } },
+      { text: "This is NOT the custom v1.3.0 pack from the comparison slide — that one conflicts and overwrites; this one layers on top.", options: { color: AMBER, bold: true, fontSize: 10.5, breakLine: true } },
+      { text: "Its playbooks apply the event→API marketplace mapping and run inventory lookups continue-on-error — exactly the caveats on the “know before you query” slide.", options: { color: MUTED, italic: true, fontSize: 9.5 } },
+    ],
+    { x: M + 0.92, y: 5.10, w: W - 1.24, h: 1.02, fontFace: F, margin: 0, lineSpacing: 13.5, valign: "top" }
+  );
+  sourceTag(
+    s,
+    `Component counts read at build time from Packs/${EXT_ID} (pack_metadata.json + directory listing): ${nExtPlaybooks} playbook files, ${nExtDashboards} dashboard, ParsingRules + ModelingRules present.  Its role against koi_koi_raw and the §7c / §7d.3 behaviours its playbooks handle: VERIFIED_FACTS §7a, §7c, §7d.3.`,
+    6.38
+  );
+  s.addNotes(
+    `${EXT_ID} ("${EXT.name}") is an optional companion pack, v${EXT.currentVersion}, ${EXT.support} support, author ${EXT.author}. ` +
+      `It adds parsing and modeling rules, ${nExtPlaybooks} playbooks and ${nExtDashboards} dashboard on top of the installed KOI integration, and it ships no integration and no commands of its own. ` +
+      "It must not be confused with the custom v1.3.0 pack on the comparison slide: that pack conflicts with this one, whereas the companion pack is additive and declares a mandatory dependency on the KOI pack. " +
+      "Its playbooks are the KOI Ext - ... set referenced in VERIFIED_FACTS §7c and §7d.3, and they bake in the two 'know before you query' caveats: the event→API marketplace mapping, and treating an empty inventory lookup as inconclusive because the inventory index lags the event stream. " +
+      "Counts on this slide are read from the pack directory at build time, not hand-typed."
+  );
+}
+
+/* ============================================================================
    SLIDE 10 — Provenance
    ========================================================================== */
 {
@@ -1185,6 +1438,10 @@ const sourceTag = (s, text, y = 6.62) =>
 /* ============================================================================
    WRITE
    ========================================================================== */
+/* Two slides were added in this revision (6b "Know before you query" and 9b the
+   companion pack), so the deck must be 13 slides. Guard it so a future edit that
+   drops a slide fails the build rather than silently shrinking the deck. */
+assert(SLIDE_COUNT === 13, `expected 13 slides, built ${SLIDE_COUNT}`);
 const out = path.join(__dirname, "KOI_Marketplace_Pack_Overview.pptx");
 
 /* pptxgenjs stamps docProps/core.xml with the wall-clock time, which would make two
@@ -1229,7 +1486,7 @@ pres
     });
     fs.writeFileSync(out, rebuilt);
     console.log(
-      `written ${out}  (${nCommands} commands, ${nArgs} args, ${nOutputDecls} outputs, ${nDistinctPaths} distinct paths, 11 slides)`
+      `written ${out}  (${nCommands} commands, ${nArgs} args, ${nOutputDecls} outputs, ${nDistinctPaths} distinct paths, ${SLIDE_COUNT} slides)`
     );
   })
   .catch((e) => {

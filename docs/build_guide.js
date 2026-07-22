@@ -250,6 +250,7 @@ const cover = [
     ["Support / author", `${PACK.pack.support} / ${PACK.pack.author}`],
     ["Ships", `Integration only — ${PACK.counts.commands} commands, ${PACK.counts.arguments} arguments, ${PACK.counts.outputs} output declarations`],
     ["Applies to", "Cortex XSIAM (event collection + commands) and Cortex XSOAR (commands only)"],
+    ["Optional companion pack", "KOI Content Extension (KoiContentExtension, v1.0.0) — parsing rules, modeling rules, 10 playbooks and a dashboard. SEPARATE, additional content; NOT part of this Marketplace pack (see 1.3)."],
     ["Document date", "20 July 2026"],
   ]),
   new Paragraph({ spacing: { before: 260 }, children: [] }),
@@ -308,6 +309,14 @@ const about = [
     "Because the pack ships no parsing rule and no modeling rule, KOI events land raw. Verified on the tenant: no XDM field is populated at all — every query, correlation rule, dashboard widget and report you build must target the raw KOI field names shown in section 8. Content that assumes XDM (for example, generic XDM-based correlation rules) will not match KOI data.",
     [{ text: "Sources: that the pack ships no parsing rule and no modeling rule is from inspecting the pack's own contents; that no XDM field is populated is from VERIFIED_FACTS.md §3.2 (live, 20 July 2026).", italics: true, color: GRAY }],
   ]),
+  /* spacer paragraph terminates the adjacent-table chain so LibreOffice does not repeat the
+     content-types table header at the top of the page this callout flows onto */
+  new Paragraph({ spacing: { after: 0 }, children: [] }),
+  callout("An optional companion pack adds the missing content — as SEPARATE content", [
+    [{ text: "Everything this pack lacks — parsing rules, modeling rules, playbooks and a dashboard — is available in a separate, optional companion pack, " }, { text: "KOI Content Extension", bold: true }, { text: " (pack folder " }, { text: "KoiContentExtension", font: "Consolas", size: 20 }, { text: ", currentVersion 1.0.0, community support). It ships " }, { text: "no integration and no commands of its own", bold: true }, { text: ": it normalises and models the " }, { text: "koi_koi_raw", font: "Consolas", size: 20 }, { text: " dataset this integration produces, and adds 10 investigation and response playbooks built strictly against the 13 commands documented here, plus one alerts dashboard." }],
+    [{ text: "It is additional content and is NOT part of the Marketplace KOI pack described in this guide. It declares the KOI pack as a mandatory dependency, so this Marketplace pack must be installed first. Install the companion pack only if you want the normalisation and playbooks; nothing in this guide requires it.", bold: true }],
+    [{ text: "Source: the companion pack's own pack_metadata.json and its contents under Packs/KoiContentExtension/. This is outside the VERIFIED_FACTS evidence base for the Marketplace pack.", italics: true, color: GRAY }],
+  ], { fill: AMBER_BG, accent: ORANGE }),
 ];
 
 /* ---------------- 2. Requirements ---------------- */
@@ -542,6 +551,43 @@ const commandSection = [
   p(`API endpoints quoted per command below are read from the integration's own source code, Koi.py (VERIFIED_FACTS.md §4.1) — that is the pack's source code, not its YAML and not by itself a live observation. The map has 11 entries; ${EXERCISED.length} of them were additionally exercised by direct API request, and the three behind the ${NOT_RUN.length} state-changing commands (PUT /policies/{id}, POST and DELETE on /policies/allowlist, POST and DELETE on /policies/blocklist) were never called. Everything else per command is from the pack source.`, { italics: true, color: GRAY }),
 ];
 
+/* Event → command/API marketplace mapping — VERIFIED_FACTS.md §7c (live, 21 July 2026).
+   The marketplace value recorded in a koi_koi_raw event uses short forms; the marketplace
+   argument required by koi-inventory-item-get and koi-inventory-item-endpoints-list (and the
+   API) uses long forms. Passing an event value straight through returns HTTP 400 where the two
+   differ. built_in / side_loaded are installation_method values leaking into the marketplace
+   field; ollama has no API equivalent. Event counts show only how common each value is. */
+const MARKETPLACE_MAP = [
+  ["software_windows", "5,301", "windows", ""],
+  ["pypi", "4,674", "pypi", "unchanged — spelled the same in both"],
+  ["chrome", "891", "chrome_web_store", ""],
+  ["built_in", "829", "—", "installation_method value in the marketplace field; treat as unknown, do not pass on"],
+  ["npm", "775", "npm", "unchanged — spelled the same in both"],
+  ["software_mac", "617", "mac", ""],
+  ["homebrew", "231", "homebrew", ""],
+  ["vsc", "175", "vscode", ""],
+  ["chocolatey", "91", "chocolatey", ""],
+  ["cursor", "88", "cursor", ""],
+  ["github", "65", "github_mcp_registry", ""],
+  ["edge", "48", "edge_add_ons", ""],
+  ["firefox", "19", "firefox_add_ons", ""],
+  ["docker", "15", "docker", ""],
+  ["npp", "12", "notepad++", ""],
+  ["openvsx", "10", "open_vsx_registry", ""],
+  ["jet", "5", "jetbrains", ""],
+  ["ollama", "5", "—", "no API equivalent; treat as unknown, do not pass on"],
+  ["claude_desktop_extensions", "5", "claude_desktop_extensions", "unchanged — spelled the same in both"],
+  ["side_loaded", "1", "—", "installation_method value in the marketplace field; treat as unknown, do not pass on"],
+];
+const marketplaceMapTable = table(
+  [2600, 1300, 2400, 3060],
+  [
+    ["Event value (koi_koi_raw)", "Events", "Command / API value", "Notes"],
+    ...MARKETPLACE_MAP.map(r => { const row = r.slice(); row.__mono = 0; return row; }),
+  ],
+  { mono: [0, 2], small: [1, 3], monoSize: 17, smallSize: 16 },
+);
+
 CMDS.forEach((c, i) => {
   commandSection.push(h2(`6.${i + 2} ${c.name}`));
   if (c.execution) {
@@ -570,6 +616,18 @@ CMDS.forEach((c, i) => {
   ]));
   argTable(c).forEach(x => commandSection.push(x));
   outTable(c).forEach(x => commandSection.push(x));
+  /* The marketplace mapping is anchored here because koi-inventory-item-get is the first command
+     that REQUIRES marketplace; koi-inventory-item-endpoints-list two commands below also does. */
+  if (c.name === "koi-inventory-item-get") {
+    commandSection.push(callout("Argument trap: the marketplace value in an event is not the marketplace value this command wants", [
+      [{ text: "koi-inventory-item-get", font: "Consolas", size: 20 }, { text: " and " }, { text: "koi-inventory-item-endpoints-list", font: "Consolas", size: 20 }, { text: " both REQUIRE " }, { text: "marketplace", font: "Consolas", size: 20 }, { text: ". The value recorded in a " }, { text: "koi_koi_raw", font: "Consolas", size: 20 }, { text: " event is not the value these commands accept. Events use short forms (" }, { text: "software_windows", font: "Consolas", size: 19 }, { text: ", " }, { text: "chrome", font: "Consolas", size: 19 }, { text: ", " }, { text: "vsc", font: "Consolas", size: 19 }, { text: "); the argument and the API use long forms (" }, { text: "windows", font: "Consolas", size: 19 }, { text: ", " }, { text: "chrome_web_store", font: "Consolas", size: 19 }, { text: ", " }, { text: "vscode", font: "Consolas", size: 19 }, { text: "). Where they differ, passing the event value straight through returns " }, { text: "HTTP 400", bold: true }, { text: "." }],
+      [{ text: "npm", font: "Consolas", size: 19 }, { text: " and " }, { text: "pypi", font: "Consolas", size: 19 }, { text: " are spelled the same in both; most other high-frequency values are not. Map every event value through the table below before calling either command. Three event values — " }, { text: "built_in", font: "Consolas", size: 19 }, { text: ", " }, { text: "side_loaded", font: "Consolas", size: 19 }, { text: " and " }, { text: "ollama", font: "Consolas", size: 19 }, { text: " — have no API equivalent (the first two are " }, { text: "installation_method", font: "Consolas", size: 19 }, { text: " values leaking into the marketplace field). Treat all three as \"unknown marketplace\" and do not pass them on." }],
+      [{ text: "Source: VERIFIED_FACTS.md §7c (live, 21 July 2026).", italics: true, color: GRAY }],
+    ], { fill: RED_BG, accent: RED }));
+    commandSection.push(p("Event marketplace value → command / API marketplace value", { bold: true, spacing: { before: 100, after: 60 }, para: { keepNext: true } }));
+    commandSection.push(marketplaceMapTable);
+    commandSection.push(p("The Events column holds 21 July 2026 counts on the reference tenant and only indicates how common each value is — not an expected result. Source: VERIFIED_FACTS.md §7c (live).", { italics: true, color: GRAY }));
+  }
 });
 
 /* ---------------- 7. Context model ---------------- */
@@ -667,9 +725,52 @@ const eventsSection = [
     [{ text: "2. ", bold: true }, { text: "alert_type", font: "Consolas", size: 20 }, { text: " is never populated. A filter of alert_type != null over the full 30-day window returned zero rows. Any query, correlation rule or playbook keyed on alert_type matches nothing here." }],
     [{ text: "Source: VERIFIED_FACTS.md §3.1 (live).", italics: true, color: GRAY }],
   ], { fill: RED_BG, accent: RED }),
-  h2("8.3 No XDM — query the raw fields"),
+
+  h2("8.3 The Alerts stream is duplicated — every alert count must dedupe"),
+  callout("Counting Alert rows overcounts by hundreds of times — read this before writing any alert query", [
+    [{ text: "This is the single most important thing to know before you query alerts. " }, { text: "The integration re-sends every still-open alert on every fetch cycle", bold: true }, { text: ", so " }, { text: "koi_koi_raw", font: "Consolas", size: 20 }, { text: " holds one row PER ALERT PER FETCH, not one row per alert. With " }, { text: "eventFetchInterval = 1", font: "Consolas", size: 20 }, { text: " minute, a single open alert becomes hundreds of identical rows over a day (357 rows sharing one " }, { text: "_time", font: "Consolas", size: 20 }, { text: " and one message, with 357 distinct " }, { text: "_insert_time", font: "Consolas", size: 20 }, { text: " values, were observed inside one notification)." }],
+    [{ text: "Over the last 24 hours on the reference tenant (21 July 2026), the Alerts stream held " }, { text: "734 rows for just 3 distinct alerts — 244.7× inflation", bold: true }, { text: ". " }, { text: "Audit is NOT affected", bold: true }, { text: ": each audit record is point-in-time and carries a unique KOI " }, { text: "id", font: "Consolas", size: 20 }, { text: " (257 rows / 257 distinct over the same 24 h). This is an Alerts-only problem." }],
+    [{ text: "Source: VERIFIED_FACTS.md §7e (live, 21 July 2026).", italics: true, color: GRAY }],
+  ], { fill: RED_BG, accent: RED }),
+  table([1500, 1500, 1300, 2400, 2660], [
+    ["Stream", "Window", "Rows", "Distinct alerts", "Inflation"],
+    ["Alerts", "last 24 h", "734", "3", "244.7×"],
+    ["Alerts", "last 90 d", "1,048", "317", "3.3×"],
+    ["Audit", "last 24 h", "257", "257 (by KOI id)", "1.0 — none"],
+    ["Audit", "last 90 d", "20,148", "20,148", "1.0 — none"],
+  ], { small: [4] }),
+  p("Figures are from the reference tenant on 21 July 2026 and are illustrative of shape, not of your volume. Source: VERIFIED_FACTS.md §7e (live).", { italics: true, color: GRAY }),
+  rich([
+    { text: "The only correct dedupe key is " },
+    { text: "metadata.notification_event_id", font: "Consolas", size: 20 },
+    { text: ". Over the 90-day window it has 317 distinct values across 1,048 alert rows — a verified 1:1 identity for a single alert occurrence. The other candidate identifiers are wrong at both extremes, so do not reach for them:" },
+  ]),
+  table([3800, 1800, 3760], [
+    ["Field", "Distinct / 1,048 rows", "What it identifies"],
+    ["_id", "1,048", "the row — counts every duplicate"],
+    ["metadata.notification_event_id", "317", "the alert occurrence — use this"],
+    ["observables[event.id] (koi_event_id)", "20", "the scan batch — far too coarse"],
+    ["finding_info.uid (finding_uid)", "3", "the finding / policy definition — far too coarse"],
+  ], { mono: [0], small: [1], monoSize: 16 }),
+  p("Any query, widget, correlation rule or playbook that counts alerts must dedupe on this key. Because the pack ships no parsing rule, there is no promoted column — extract it inline from the raw metadata field. This is the corrected count:", { para: { keepNext: true } }),
+  code("dataset = koi_koi_raw"),
+  code('| filter source_log_type = "Alerts"'),
+  code('| alter koi_notification_id = json_extract_scalar(metadata, "$.notification_event_id")'),
+  code("| comp count_distinct(koi_notification_id) as alerts"),
+  rich([
+    { text: "On the reference data for the last 24 hours (21 July 2026) this returns " },
+    { text: "3", bold: true },
+    { text: ", where the naive " },
+    { text: "comp count() as alerts", font: "Consolas", size: 20 },
+    { text: " returns " },
+    { text: "734", bold: true },
+    { text: ". A triage playbook that reacts per alert row will likewise fire hundreds of times for one real alert unless it dedupes on the same key." },
+  ]),
+  p("Source: VERIFIED_FACTS.md §7e (live, 21 July 2026). The XQL is constructed from the verified field name and was not itself re-executed on the tenant.", { italics: true, color: GRAY }),
+
+  h2("8.4 No XDM — query the raw fields"),
   p("The pack ships no parsing rule and no modeling rule, so nothing maps this data to the Cortex Data Model. No XDM field is populated. Every query below targets raw field names deliberately."),
-  h2("8.4 XQL starting points"),
+  h2("8.5 XQL starting points"),
   p("Confirm the collector is delivering, and see the split:", { bold: true, para: { keepNext: true } }),
   code("dataset = koi_koi_raw"),
   code("| comp count() as events by source_log_type"),
@@ -692,10 +793,11 @@ const eventsSection = [
   code('| filter source_log_type = "Alerts"'),
   code("| fields _time, class_uid, type_uid, severity_id, confidence_id, risk_level_id, status_id"),
   code("| sort desc _time"),
-  p("Alert severity distribution:", { bold: true, para: { keepNext: true } }),
+  p("Alert severity distribution — count_distinct on the dedupe key, not count(), because the Alerts stream is duplicated (8.3):", { bold: true, para: { keepNext: true } }),
   code("dataset = koi_koi_raw"),
   code('| filter source_log_type = "Alerts"'),
-  code("| comp count() as alerts by severity_id"),
+  code('| alter koi_notification_id = json_extract_scalar(metadata, "$.notification_event_id")'),
+  code("| comp count_distinct(koi_notification_id) as alerts by severity_id"),
   code("| sort desc alerts"),
   p("Reading the JSON-string fields on alert rows — this is the form that works:", { bold: true, para: { keepNext: true } }),
   code("dataset = koi_koi_raw"),
@@ -822,7 +924,7 @@ const provenance = [
   table([2600, 6760], [
     ["Statement", "Status"],
     ["Cortex UI navigation wording in section 3 (Marketplace, search, install)", "Standard platform navigation, not part of the pack and not re-verified for this document. Flagged in place in section 3."],
-    ["The XQL statements in section 8.4", "Constructed for this guide from verified field names and verified JSON-string behaviour; the statements themselves were not each executed. Flagged in place in section 8.4."],
+    ["The XQL statements in section 8.5", "Constructed for this guide from verified field names and verified JSON-string behaviour; the statements themselves were not each executed. Flagged in place in section 8.5."],
     ["\"Cortex will require confirmation to run execution: true commands\" (section 6)", "Platform behaviour for commands flagged execution: true. The flag itself is from the pack source; the platform's handling of it is general product behaviour, not verified on the reference tenant."],
     ["\"Because Cortex keys content on those identifiers, the two packs cannot be installed side by side\" (section 1.2)", "The shared identifiers are from the pack source. That Cortex resolves a collision by overwriting is platform behaviour; no overwrite was performed on the reference tenant to watch it happen."],
     ["The playbook ordering hazard in section 7.3 and the \"last one wins\" consequence", "Deduced from the declared context paths, which are from the pack source. No playbook was built and run to observe the overwrite."],
