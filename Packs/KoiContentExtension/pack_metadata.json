@@ -2,7 +2,7 @@
     "name": "KOI Content Extension",
     "description": "Parsing rules, modeling rules, playbooks and a dashboard that extend the Palo Alto Networks KOI Marketplace content pack (pack \"KOI\", integration id KOI, v1.2.3 or later). This pack ships no integration and no commands of its own: it normalizes and models the koi_koi_raw dataset produced by the installed KOI integration, and adds investigation and response playbooks built strictly against that integration's 13 commands. The KOI pack must be installed first.",
     "support": "community",
-    "currentVersion": "1.1.0",
+    "currentVersion": "1.2.0",
     "author": "Ayman Mahmoud",
     "url": "https://github.com/ayman-m/koi-xsiam-markeplacepack",
     "email": "",

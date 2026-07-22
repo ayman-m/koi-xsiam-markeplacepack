@@ -1,0 +1,43 @@
+{
+    "id": "incident_koigovernance",
+    "version": -1,
+    "modified": "2026-07-22T00:00:00Z",
+    "name": "KOI Governance State",
+    "prettyName": "KOI Governance State",
+    "ownerOnly": false,
+    "description": "Whether the item is on the KOI block/allow list (set by Investigate Item).",
+    "cliName": "koigovernance",
+    "type": "singleSelect",
+    "closeForm": false,
+    "editForm": true,
+    "required": false,
+    "script": "",
+    "fieldCalcScript": "",
+    "neverSetAsRequired": false,
+    "isReadOnly": false,
+    "selectValues": [
+        "ungoverned",
+        "blocklisted",
+        "allowlisted"
+    ],
+    "validationRegex": "",
+    "useAsKpi": false,
+    "locked": false,
+    "system": false,
+    "content": true,
+    "group": 0,
+    "hidden": false,
+    "associatedTypes": [
+        "KOI Supply Chain Alert"
+    ],
+    "systemAssociatedTypes": null,
+    "associatedToAll": false,
+    "unmapped": false,
+    "unsearchable": false,
+    "caseInsensitive": true,
+    "columns": [],
+    "defaultRows": [],
+    "sla": 0,
+    "threshold": 72,
+    "fromVersion": "6.10.0"
+}
