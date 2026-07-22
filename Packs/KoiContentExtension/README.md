@@ -255,10 +255,12 @@ window. The 53rd is the duplication monitor added with the dedupe fix. All widge
 `koi_koi_raw` directly; none reference `xdm.*`, so the dashboard does not depend on the modeling
 rule, and none depends on a promoted column without an inline raw fallback (see caveat 1).
 
-### Playbooks (10)
+### Playbooks (12)
 
 | Playbook | Purpose |
 |---|---|
+| `KOI Ext - Hunt Sweep` | **Job-attached, time-triggered** proactive hunt sweep. Runs a configurable set of validated hunting XQL queries, investigates every match, posts a war-room table, and routes confirmed ungoverned known-bad to an analyst-gated block. **Triggered by a Job, not a correlation rule** — see below |
+| `KOI Ext - Hunt Match Investigation` | Sub-playbook of Hunt Sweep. Normalizes one hunt match and returns its investigation verdict, reusing `KOI Ext - Investigate Item` for item enrichment and `core-get-endpoints` for host/shadow matches |
 | `KOI Ext - Alert Triage` | End-to-end triage of a KOI alert: builds context, scores four signals, reaches a verdict, and either auto-closes or hands off to response. Top-level entry point |
 | `KOI Ext - Extract Alert Context` | Sub-playbook. Parses the alert's `finding_info` / `observables` / `resources` into the flat `KoiContext.*` object the rest of the chain consumes |
 | `KOI Ext - Investigate Item` | Sub-playbook. Full investigation of one inventory item: org inventory record, the endpoints carrying it, and its allowlist/blocklist standing |
@@ -277,6 +279,74 @@ rule, and none depends on a promoted column without an inline raw fallback (see 
 
 ---
 
+## Scheduled hunt sweep — `KOI Ext - Hunt Sweep`
+
+`KOI Ext - Hunt Sweep` runs the pack's **proactive hunting queries on a schedule**, investigates
+any matches, and posts a war-room summary. It is triggered by a **time-triggered Cortex Job, NOT by
+a correlation rule** — this is the deliberate design for this pack. KOI is run-on-demand (there is
+no resident agent), so a scheduled Job is the hunt scheduler, exactly as it is for
+`KOI Ext - Unified Script Runner`.
+
+### What it does each run
+
+1. Runs the hunts in `hunt_set` in parallel through `xdr-xql-generic-query` (bodies embedded
+   **verbatim**, parameterised only by `xql_time_frame`):
+   - **H2.1** items carrying compromise-grade KOI findings (malicious / spyware / ransomware /
+     exfil / typosquat), deduped on `notification_event_id`;
+   - **H2.6** critical/high KOI known-bad that is **not under governance**;
+   - **H1.3** install **bursts** (one item across many hosts in a tight window);
+   - **H4.2** **shadow agentic software** (MCP / AI agent) executing in `xdr_data` that KOI never
+     inventoried.
+2. Normalizes every match into a single `KoiHunt.Matches` array, mapping the raw short-form
+   marketplace to the API vocabulary.
+3. **Zero matches → posts "hunt sweep clean" and closes.**
+4. Otherwise investigates each match (bounded by `max_matches_to_investigate`): item matches via
+   `KOI Ext - Investigate Item`, host/shadow matches via `core-get-endpoints` (and *recommends*,
+   never runs, a `core-script-run` of the KOI deployment script to refresh a stale host).
+5. Posts **one war-room markdown table** of every match with its verdict.
+6. **Analyst-gated response, never automatic:** a confirmed known-bad, ungoverned item is routed to
+   `KOI Ext - Block and Remediate` with **`auto_block=false`** — the blocklist write requires human
+   approval. A scheduled hunt never auto-blocks.
+7. Closes its own investigation (Job hygiene).
+
+### Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `hunt_set` | `H2.1,H2.6,H1.3,H4.2` | Which hunts run. A comma-separated set of hunt ids, or a List value (`${lists.<name>}`). Tune it **without editing the playbook** |
+| `min_risk` | `high` | Minimum item risk eligible for the analyst-gated response route |
+| `xql_time_frame` | `7 days` | Relative time frame for every hunt query |
+| `auto_investigate` | `true` | `false` posts the raw matches and closes without investigating or routing |
+| `max_matches_to_investigate` | `25` | Per-hunt fan-out cap so a scheduled sweep never runs unbounded (each hunt's XQL `limit` is a hard backstop) |
+| `enable_response_gate` | `true` | `false` summarizes only; never routes to response |
+| `instance_name` | — | KOI integration instance; empty uses the single configured one |
+
+### Attach it to a Job
+
+Mirror the way `KOI Ext - Unified Script Runner` is scheduled:
+
+1. **Settings → Investigation & Response → Jobs → New Job.**
+2. Choose **Scheduled** (time-triggered) and set the cadence (e.g. every 12 or 24 hours, or a cron
+   such as daily at 02:00). Do **not** attach a feed or a triggering incident type — this is a
+   time trigger, not an event trigger.
+3. Set the Job's **Playbook** to **`KOI Ext - Hunt Sweep`**.
+4. (Optional) Override inputs on the Job — e.g. narrow `hunt_set`, lengthen `xql_time_frame`, or set
+   `enable_response_gate=false` for a report-only cadence while you tune it.
+5. Ensure the **Cortex XDR - XQL Query Engine** integration is enabled on the tenant (see the
+   dependency note below) and the **KOI** integration instance is configured. Save and enable the Job.
+
+Each run opens its own investigation, does the work above, and closes it — so the Jobs list stays
+clean and there is one war-room summary per run.
+
+> **This playbook effectively requires the XQL Query Engine.** Its whole purpose is running XQL, so
+> unlike the optional enrichment on the investigation playbooks, `KOI Ext - Hunt Sweep` does nothing
+> useful without `xdr-xql-generic-query`. It still **fails gracefully**: every XQL task is
+> `continueonerror`, and if the engine is absent the playbook posts *"XQL engine unavailable — hunt
+> sweep skipped"* and closes. The pack does **not** hard-depend on the engine — the `CortexXDR`
+> dependency stays `mandatory: false` (see below); only this one playbook needs it.
+
+---
+
 ## Dependencies
 
 Declared as **mandatory** in `pack_metadata.json`:
@@ -286,13 +356,13 @@ Declared as **mandatory** in `pack_metadata.json`:
 | `Koi` | KOI | The integration, its 13 commands, and the `koi_koi_raw` dataset. **v1.2.3 or later** |
 | `CommonScripts` | Common Scripts | `SetAndHandleEmpty` (86 uses), `Set`, `Print`, `PrintErrorEntry`, `DeleteContext`, `GetErrorsFromEntry` |
 | `FiltersAndTransformers` | Filters And Transformers | The `ParseJSON`, `JsonToTable`, `SetIfEmpty`, `FormatTemplate` and `LastArrayElement` transformers used in context expressions |
-| `Core` | Core | The `Cortex Core - IR` integration, for `core-get-scripts`, `core-get-endpoints` and `core-script-run` in the three `Unified *` playbooks |
+| `Core` | Core | The `Cortex Core - IR` integration, for `core-get-scripts`, `core-get-endpoints` and `core-script-run` in the three `Unified *` playbooks and the host branch of `KOI Ext - Hunt Sweep` |
 
 Declared as **optional** (`mandatory: false`) in `pack_metadata.json`:
 
 | Pack id | Display name | Why |
 |---|---|---|
-| `CortexXDR` | Cortex XDR by Palo Alto Networks | Provides the **Cortex XDR - XQL Query Engine** integration and its `xdr-xql-generic-query` command, used by the optional XDR-correlation enrichment described below. Not required for the pack to install or function |
+| `CortexXDR` | Cortex XDR by Palo Alto Networks | Provides the **Cortex XDR - XQL Query Engine** integration and its `xdr-xql-generic-query` command, used by the optional XDR-correlation enrichment below **and required in practice by `KOI Ext - Hunt Sweep`** (whose purpose is running XQL — see *Scheduled hunt sweep* above; it still degrades gracefully when the engine is absent). Kept `mandatory: false` so the pack installs and every KOI-command playbook works with no XQL engine present |
 
 ### Optional — Cortex XDR × KOI correlation enrichment (XQL)
 

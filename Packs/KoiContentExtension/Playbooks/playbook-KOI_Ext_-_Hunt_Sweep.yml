@@ -1,0 +1,2034 @@
+id: KOI Ext - Hunt Sweep
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Hunt Sweep
+description: |-
+  JOB-ATTACHABLE playbook for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands). Attach it to a time-triggered Cortex Job (Investigation & Response > Jobs) - it is triggered by a JOB ON A SCHEDULE, NOT by a correlation rule. Like KOI Ext - Unified Script Runner it closes its own investigation at the end of every run.
+
+  WHAT IT DOES:
+  1. Runs a configurable SET of validated, cheap, high-signal hunting XQL queries in parallel via xdr-xql-generic-query (bodies embedded verbatim, parameterised only by xql_time_frame):
+     - H2.1  items carrying compromise-grade KOI findings (malicious/spyware/ransomware/exfil/typosquat), deduped on notification_event_id;
+     - H2.6  critical/high KOI known-bad NOT under governance (ungoverned known-bad);
+     - H1.3  install bursts (one item across many hosts in a tight window);
+     - H4.2  shadow agentic software (MCP/agent) executing in XDR that KOI never inventoried.
+     The set is chosen by the hunt_set input (no playbook edit needed); default is the four above.
+  2. Normalizes every match into a single KoiHunt.Matches array (via the sub-playbook), mapping the raw short-form marketplace to the API vocabulary.
+  3. Gates on matches: zero -> posts 'hunt sweep clean' and closes.
+  4. Investigates each match (bounded fan-out): item matches via KOI Ext - Investigate Item; host/shadow matches via Cortex core-get-endpoints, surfacing (never running) core-script-run to refresh a stale host.
+  5. Posts ONE war-room markdown table of every match with its verdict.
+  6. ANALYST-GATED response (never automatic): a confirmed known-bad, ungoverned item is routed to KOI Ext - Block and Remediate with auto_block=false, so the blocklist write requires human approval. A scheduled hunt NEVER auto-blocks.
+  7. Closes the investigation.
+
+  DEPENDENCY: this playbook's PURPOSE is running XQL, so the Cortex XDR - XQL Query Engine (xdr-xql-generic-query) is effectively REQUIRED for it - but the pack does not hard-depend on it. Every XQL task is continueonerror and the playbook fails gracefully: if the engine is absent it posts 'XQL engine unavailable - hunt sweep skipped' and closes.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koihsw00-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koihsw00-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+      description: ''
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    nexttasks:
+      '#none#':
+      - '1'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 50
+        }
+      }
+  '1':
+    id: '1'
+    taskid: koihsw00-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000001
+      version: -1
+      name: Clear prior XQL results
+      iscommand: false
+      type: regular
+      script: DeleteContext
+      description: Deletes PaloAltoNetworksXQL.GenericQuery so this run's hunts write clean results and the engine-present check below is meaningful.
+      brand: ''
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '2'
+      - '4'
+      - '6'
+      - '8'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 195
+        }
+      }
+  '2':
+    id: '2'
+    taskid: koihsw00-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000002
+      version: -1
+      name: Run H2.1?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: H2.1 is in hunt_set.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            value:
+              simple: H2.1
+          operator: inList
+          right:
+            iscontext: true
+            value:
+              simple: inputs.hunt_set
+    nexttasks:
+      'yes':
+      - '3'
+      '#default#':
+      - '10'
+    view: |-
+      {
+        "position": {
+          "x": 100,
+          "y": 360
+        }
+      }
+  '3':
+    id: '3'
+    taskid: koihsw00-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000003
+      version: -1
+      name: Hunt H2.1 (xdr-xql-generic-query)
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||xdr-xql-generic-query'
+      description: Runs the validated H2.1 hunt over its dataset via the Cortex XDR - XQL Query Engine. Body verbatim; parameterised only by time_frame (${inputs.xql_time_frame}). continueonerror so a slow/rate-limited/absent engine never aborts the sweep - the gather step below detects an absent engine and posts 'XQL engine unavailable'.
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      query:
+        simple: |-
+          // HUNT H2.1 - Compromise-grade findings present but unactioned (known-bad, un-triaged).
+          // HYPOTHESIS: KOI already scored an item with a risk 9-10 compromise-indicator finding,
+          //   yet it is still installed and no one has triaged it.
+          // HIT = a live installed item KOI itself calls malicious/spyware/exfil/typosquat, on a host.
+          // Pack: Marketplace KOI pack v1.2.3 -> koi_koi_raw (Alerts). Findings live on the item resource
+          //   at data.findings.findings[].finding_id. Alerts are re-sent ~245x/24h -> dedup is mandatory.
+          dataset = koi_koi_raw
+          | filter source_log_type = "Alerts"
+          | alter nid      = json_extract_scalar(metadata, "$.notification_event_id")
+          | alter res_arr  = json_extract_array(resources, "$")
+          | alter dev_obj  = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element","$.type") = "device"), 0)
+          | alter itm_obj  = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element","$.type") != "device"), 0)
+          | alter item_kind   = json_extract_scalar(itm_obj, "$.type")
+          | alter item_name   = json_extract_scalar(itm_obj, "$.name")
+          | alter item_id     = json_extract_scalar(itm_obj, "$.data.item_id")
+          | alter item_risk   = json_extract_scalar(itm_obj, "$.data.risk_level")
+          | alter marketplace = json_extract_scalar(itm_obj, "$.data.marketplace")
+          | alter alert_host  = json_extract_scalar(dev_obj, "$.data.hostname")
+          | alter f_ids = arraymap(json_extract_array(itm_obj, "$.data.findings.findings"), json_extract_scalar("@element","$.finding_id"))
+          // PARAM: the compromise-grade finding_id set (all from scratchpad/findings_hunt.json, risk 9-10)
+          | alter hits  = arrayfilter(f_ids, "@element" in (
+                "AssociatedwithMaliciousCampaign",              // 10
+                "d0a50fdc-62f7-4b94-bb1a-600fec5959bc",         // 10 Malicious Activity Detected
+                "ExfilsCloudandRemoteAccessSecrets",            // 10
+                "RansomwareBehaviorDetected",                   // 10
+                "SpywareActivity",                              // 10
+                "ExfilsAIChatConversations",                    // 9
+                "HighRiskManifestConfusion",                    // 9
+                "PromptInjectionDetected",                      // 9
+                "Typosquatting"))                               // 9
+          | alter hit_cnt = array_length(hits)
+          | dedup nid by desc _time
+          | filter hit_cnt > 0
+          | fields _time, item_kind, item_name, item_id, item_risk, marketplace, alert_host, hits, nid
+          | sort desc _time
+          | limit 200
+      query_name:
+        simple: KOI Ext - Hunt H2.1
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+    nexttasks:
+      '#error#': &id001
+      - '10'
+      '#none#': *id001
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 100,
+          "y": 520
+        }
+      }
+  '4':
+    id: '4'
+    taskid: koihsw00-0000-4000-8000-000000000004
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000004
+      version: -1
+      name: Run H2.6?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: H2.6 is in hunt_set.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            value:
+              simple: H2.6
+          operator: inList
+          right:
+            iscontext: true
+            value:
+              simple: inputs.hunt_set
+    nexttasks:
+      'yes':
+      - '5'
+      '#default#':
+      - '10'
+    view: |-
+      {
+        "position": {
+          "x": 350,
+          "y": 360
+        }
+      }
+  '5':
+    id: '5'
+    taskid: koihsw00-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000005
+      version: -1
+      name: Hunt H2.6 (xdr-xql-generic-query)
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||xdr-xql-generic-query'
+      description: Runs the validated H2.6 hunt over its dataset via the Cortex XDR - XQL Query Engine. Body verbatim; parameterised only by time_frame (${inputs.xql_time_frame}). continueonerror so a slow/rate-limited/absent engine never aborts the sweep - the gather step below detects an absent engine and posts 'XQL engine unavailable'.
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      query:
+        simple: |-
+          // HUNT H2.6 - Critical/high known-bad that is NOT under governance.
+          // HYPOTHESIS: KOI alerts on critical/high items, but the tenant blocklist is EMPTY (verified:
+          //   0 blocklist_items_added audit actions) and many carry no remediation. Known-bad with no
+          //   block and no remediation = an open, accepted risk.
+          // HIT = a critical/high alerting item with NO remediation audit record.
+          // Left anti-join: Alerts(known-bad) vs Audit(remediation). Blocklist governance is null here.
+          dataset = koi_koi_raw
+          | filter source_log_type = "Alerts"
+          | alter nid      = json_extract_scalar(metadata, "$.notification_event_id")
+          | alter res_arr  = json_extract_array(resources, "$")
+          | alter dev_obj  = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element","$.type") = "device"), 0)
+          | alter itm_obj  = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element","$.type") != "device"), 0)
+          | alter item_key = json_extract_scalar(itm_obj, "$.data.item_id")
+          | alter item_name= json_extract_scalar(itm_obj, "$.name")
+          | alter item_risk= json_extract_scalar(itm_obj, "$.data.risk_level")
+          | alter alert_host = json_extract_scalar(dev_obj, "$.data.hostname")
+          | filter item_risk in ("critical","high") and item_key != null
+          | dedup item_key by desc _time
+          | fields item_key, item_name, item_risk, alert_host
+          | join type = left (
+              dataset = koi_koi_raw
+              | filter source_log_type = "Audit" and type = "remediation"
+              | alter rem_key = object_id, rem_action = action
+              | dedup rem_key by desc _time
+              | fields rem_key, rem_action
+            ) as rem  rem.rem_key = item_key
+          | filter rem_action = null
+          | fields item_name, item_key, item_risk, alert_host, rem_action
+          | sort desc item_risk
+          | limit 200
+      query_name:
+        simple: KOI Ext - Hunt H2.6
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+    nexttasks:
+      '#error#': &id002
+      - '10'
+      '#none#': *id002
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 350,
+          "y": 520
+        }
+      }
+  '6':
+    id: '6'
+    taskid: koihsw00-0000-4000-8000-000000000006
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000006
+      version: -1
+      name: Run H1.3?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: H1.3 is in hunt_set.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            value:
+              simple: H1.3
+          operator: inList
+          right:
+            iscontext: true
+            value:
+              simple: inputs.hunt_set
+    nexttasks:
+      'yes':
+      - '7'
+      '#default#':
+      - '10'
+    view: |-
+      {
+        "position": {
+          "x": 600,
+          "y": 360
+        }
+      }
+  '7':
+    id: '7'
+    taskid: koihsw00-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000007
+      version: -1
+      name: Hunt H1.3 (xdr-xql-generic-query)
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||xdr-xql-generic-query'
+      description: Runs the validated H1.3 hunt over its dataset via the Cortex XDR - XQL Query Engine. Body verbatim; parameterised only by time_frame (${inputs.xql_time_frame}). continueonerror so a slow/rate-limited/absent engine never aborts the sweep - the gather step below detects an absent engine and posts 'XQL engine unavailable'.
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      query:
+        simple: |-
+          /* HUNT H1.3 - Install bursts (mass deployment in a tight window).
+             HYPOTHESIS: the same item installed across many hosts inside one short window is either a
+             legitimate rollout OR a compromised-update / worm-like push. Either way, the moment an
+             item fans out across the estate is worth surfacing.
+             HIT MEANS: N distinct hosts installed one item within the same hour - confirm it was an
+             intended rollout, not an auto-update pushing a poisoned version. */
+          dataset = koi_koi_raw
+          | filter source_log_type = "Audit" and type = "extensions" and action = "installed"
+          | filter object_id != null
+          | alter bucket = format_timestamp("%Y-%m-%d %H:00", _time)
+          | comp count_distinct(hostname) as hosts,
+                 count()                  as install_events,
+                 values(hostname)         as host_list,
+                 values(item_version)     as versions,
+                 min(_time)               as window_start,
+                 max(_time)               as window_end
+               by object_id, object_name, platform, bucket
+          | filter hosts >= 3
+          | sort desc hosts, desc install_events
+          | limit 200
+      query_name:
+        simple: KOI Ext - Hunt H1.3
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+    nexttasks:
+      '#error#': &id003
+      - '10'
+      '#none#': *id003
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 600,
+          "y": 520
+        }
+      }
+  '8':
+    id: '8'
+    taskid: koihsw00-0000-4000-8000-000000000008
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000008
+      version: -1
+      name: Run H4.2?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: H4.2 is in hunt_set.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            value:
+              simple: H4.2
+          operator: inList
+          right:
+            iscontext: true
+            value:
+              simple: inputs.hunt_set
+    nexttasks:
+      'yes':
+      - '9'
+      '#default#':
+      - '10'
+    view: |-
+      {
+        "position": {
+          "x": 850,
+          "y": 360
+        }
+      }
+  '9':
+    id: '9'
+    taskid: koihsw00-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000009
+      version: -1
+      name: Hunt H4.2 (xdr-xql-generic-query)
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||xdr-xql-generic-query'
+      description: Runs the validated H4.2 hunt over its dataset via the Cortex XDR - XQL Query Engine. Body verbatim; parameterised only by time_frame (${inputs.xql_time_frame}). continueonerror so a slow/rate-limited/absent engine never aborts the sweep - the gather step below detects an absent engine and posts 'XQL engine unavailable'.
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type = ENUM.PROCESS
+          | alter
+              proc = lowercase(coalesce(action_process_image_name, "")),
+              cmd  = lowercase(coalesce(action_process_image_command_line, "")),
+              root = lowercase(coalesce(causality_actor_process_image_name, ""))
+          | alter kind = if(
+                cmd ~= "[/@\-]mcp([\-/@\s\"']|$)" or cmd contains "mcp-server" or cmd contains "modelcontextprotocol", "mcp_server",
+                proc contains "claude" or proc contains "cursor" or proc contains "ollama" or proc contains "windsurf" or proc contains "antigravity" or proc contains "copilot" or proc contains "codex", "ai_agent",
+                null)
+          | filter kind != null
+          | alter mcp_entry = arrayindex(regextract(cmd, "([@a-z0-9._/\-]*[/@\-]mcp[a-z0-9._/@\-]*)"), 0)
+          | alter exec_token = lowercase(if(kind = "mcp_server",
+                  if(mcp_entry contains "/node_modules/" or mcp_entry contains "/bin/", arrayindex(regextract(mcp_entry, "([^/]+)$"), 0), arrayindex(regextract(mcp_entry, "([^/@]+)$"), 0)),
+                  arrayindex(regextract(proc, "([a-z0-9]+)"), 0)))
+          | filter exec_token != null and exec_token != ""
+          | comp count() as spawns, min(_time) as first_exec, max(_time) as last_exec by agent_hostname, kind, exec_token, causality_actor_process_image_name
+          | join type = inner (
+              dataset = koi_koi_raw
+              | filter source_log_type = "Audit"
+              | alter khost = lowercase(hostname)
+              | comp count() as koi_events by khost
+            ) as cov cov.khost = lowercase(agent_hostname)
+          | join type = left (
+              dataset = koi_koi_raw
+              | filter source_log_type = "Audit" and object_type = "item"
+              | alter nm = lowercase(coalesce(object_name, ""))
+              | alter koi_token = arrayindex(regextract(nm, "([a-z0-9][a-z0-9._+-]*)$"), 0)
+              | filter koi_token != null and koi_token != ""
+              | comp count() as koi_seen by koi_token
+            ) as koi koi.koi_token = exec_token
+          | alter coverage = if(koi_seen = null, "SHADOW_NOT_IN_KOI", "known_to_koi")
+          | fields agent_hostname, kind, exec_token, causality_actor_process_image_name, spawns, first_exec, last_exec, koi_seen, coverage
+          | sort asc coverage, desc spawns
+          | limit 100
+      query_name:
+        simple: KOI Ext - Hunt H4.2
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+    nexttasks:
+      '#error#': &id004
+      - '10'
+      '#none#': *id004
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 850,
+          "y": 520
+        }
+      }
+  '10':
+    id: '10'
+    taskid: koihsw00-0000-4000-8000-000000000010
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000010
+      version: -1
+      name: XQL engine present?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: If no query produced a PaloAltoNetworksXQL.GenericQuery result at all, the Cortex XDR - XQL Query Engine is absent (or no hunts were selected) - degrade gracefully.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: PaloAltoNetworksXQL.GenericQuery
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      'yes':
+      - '11'
+      '#default#':
+      - '40'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 690
+        }
+      }
+  '11':
+    id: '11'
+    taskid: koihsw00-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000011
+      version: -1
+      name: Collect H2.1 matches
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Extracts the KOI Ext - Hunt H2.1 query's rows into a dedicated key so the investigation loop has a clean root and the match gate can test it.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: HuntResults.h21
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: PaloAltoNetworksXQL.GenericQuery.query_name
+              operator: isEqualString
+              right:
+                value:
+                  simple: KOI Ext - Hunt H2.1
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '12'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 835
+        }
+      }
+  '12':
+    id: '12'
+    taskid: koihsw00-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000012
+      version: -1
+      name: Collect H2.6 matches
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Extracts the KOI Ext - Hunt H2.6 query's rows into a dedicated key so the investigation loop has a clean root and the match gate can test it.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: HuntResults.h26
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: PaloAltoNetworksXQL.GenericQuery.query_name
+              operator: isEqualString
+              right:
+                value:
+                  simple: KOI Ext - Hunt H2.6
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '13'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 960
+        }
+      }
+  '13':
+    id: '13'
+    taskid: koihsw00-0000-4000-8000-000000000013
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000013
+      version: -1
+      name: Collect H1.3 matches
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Extracts the KOI Ext - Hunt H1.3 query's rows into a dedicated key so the investigation loop has a clean root and the match gate can test it.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: HuntResults.h13
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: PaloAltoNetworksXQL.GenericQuery.query_name
+              operator: isEqualString
+              right:
+                value:
+                  simple: KOI Ext - Hunt H1.3
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '14'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1085
+        }
+      }
+  '14':
+    id: '14'
+    taskid: koihsw00-0000-4000-8000-000000000014
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000014
+      version: -1
+      name: Collect H4.2 matches
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Extracts the KOI Ext - Hunt H4.2 query's rows into a dedicated key so the investigation loop has a clean root and the match gate can test it.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: HuntResults.h42
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: PaloAltoNetworksXQL.GenericQuery.query_name
+              operator: isEqualString
+              right:
+                value:
+                  simple: KOI Ext - Hunt H4.2
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '15'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1210
+        }
+      }
+  '15':
+    id: '15'
+    taskid: koihsw00-0000-4000-8000-000000000015
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000015
+      version: -1
+      name: Any matches?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: True if any selected hunt returned at least one row.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: HuntResults.h21
+          operator: isNotEmpty
+          right:
+            value: {}
+        - left:
+            iscontext: true
+            value:
+              simple: HuntResults.h26
+          operator: isNotEmpty
+          right:
+            value: {}
+        - left:
+            iscontext: true
+            value:
+              simple: HuntResults.h13
+          operator: isNotEmpty
+          right:
+            value: {}
+        - left:
+            iscontext: true
+            value:
+              simple: HuntResults.h42
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      'yes':
+      - '16'
+      '#default#':
+      - '45'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1355
+        }
+      }
+  '16':
+    id: '16'
+    taskid: koihsw00-0000-4000-8000-000000000016
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000016
+      version: -1
+      name: Auto-investigate matches?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: inputs.auto_investigate. When false, the matches are summarized raw and the run closes without investigating or routing.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.auto_investigate
+          operator: isEqualString
+          right:
+            value:
+              simple: 'true'
+    nexttasks:
+      'yes':
+      - '17'
+      '#default#':
+      - '60'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1500
+        }
+      }
+  '17':
+    id: '17'
+    taskid: koihsw00-0000-4000-8000-000000000017
+    type: playbook
+    task:
+      id: koihsw00-0000-4000-8000-000000000017
+      version: -1
+      name: Investigate H2.1 matches
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Hunt Match Investigation
+      description: For every H2.1 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+    separatecontext: true
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      match:
+        complex:
+          root: HuntResults.h21
+      hunt_id:
+        simple: H2.1
+      match_kind:
+        simple: item
+      known_bad:
+        simple: 'true'
+      reason:
+        simple: 'Compromise-grade KOI finding present but unactioned (risk 9-10: malicious/spyware/exfil/ransomware/typosquat).'
+      xql_time_frame:
+        simple: ${inputs.xql_time_frame}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '19'
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ''
+      wait: 1
+      max: ${inputs.max_matches_to_investigate}
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1645
+        }
+      }
+  '19':
+    id: '19'
+    taskid: koihsw00-0000-4000-8000-000000000019
+    type: playbook
+    task:
+      id: koihsw00-0000-4000-8000-000000000019
+      version: -1
+      name: Investigate H2.6 matches
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Hunt Match Investigation
+      description: For every H2.6 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+    separatecontext: true
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      match:
+        complex:
+          root: HuntResults.h26
+      hunt_id:
+        simple: H2.6
+      match_kind:
+        simple: item
+      known_bad:
+        simple: 'true'
+      reason:
+        simple: Critical/high KOI known-bad with no remediation and no blocklist governance (open accepted risk).
+      xql_time_frame:
+        simple: ${inputs.xql_time_frame}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '21'
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ''
+      wait: 1
+      max: ${inputs.max_matches_to_investigate}
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1790
+        }
+      }
+  '21':
+    id: '21'
+    taskid: koihsw00-0000-4000-8000-000000000021
+    type: playbook
+    task:
+      id: koihsw00-0000-4000-8000-000000000021
+      version: -1
+      name: Investigate H1.3 matches
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Hunt Match Investigation
+      description: For every H1.3 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+    separatecontext: true
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      match:
+        complex:
+          root: HuntResults.h13
+      hunt_id:
+        simple: H1.3
+      match_kind:
+        simple: item
+      known_bad:
+        simple: 'false'
+      reason:
+        simple: Install burst - one item deployed across many hosts in a tight window (possible compromised-update push).
+      xql_time_frame:
+        simple: ${inputs.xql_time_frame}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '23'
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ''
+      wait: 1
+      max: ${inputs.max_matches_to_investigate}
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1935
+        }
+      }
+  '23':
+    id: '23'
+    taskid: koihsw00-0000-4000-8000-000000000023
+    type: playbook
+    task:
+      id: koihsw00-0000-4000-8000-000000000023
+      version: -1
+      name: Investigate H4.2 matches
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Hunt Match Investigation
+      description: For every H4.2 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+    separatecontext: true
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      match:
+        complex:
+          root: HuntResults.h42
+      hunt_id:
+        simple: H4.2
+      match_kind:
+        simple: host
+      known_bad:
+        simple: 'false'
+      reason:
+        simple: Shadow agentic software (MCP server / AI agent) executing on a KOI-covered host but never inventoried by KOI.
+      xql_time_frame:
+        simple: ${inputs.xql_time_frame}
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '25'
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ''
+      wait: 1
+      max: ${inputs.max_matches_to_investigate}
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2080
+        }
+      }
+  '25':
+    id: '25'
+    taskid: koihsw00-0000-4000-8000-000000000025
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000025
+      version: -1
+      name: Post hunt-sweep summary header
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: War-room header for the sweep summary.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        simple: '## KOI Ext - Hunt Sweep summary
+
+          Every hunt match below carries its investigation verdict (org risk, blast radius, governance) and a recommended action. Confirmed known-bad, ungoverned items are routed to KOI Ext - Block and Remediate with analyst approval required (auto_block=false) - a scheduled sweep never auto-blocks.'
+    nexttasks:
+      '#none#':
+      - '26'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1830
+        }
+      }
+  '26':
+    id: '26'
+    taskid: koihsw00-0000-4000-8000-000000000026
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000026
+      version: -1
+      name: Post hunt-sweep match table
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: Posts the normalized KoiHunt.Matches array as a markdown table to the war room.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        complex:
+          root: KoiHunt.Matches
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '27'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1975
+        }
+      }
+  '27':
+    id: '27'
+    taskid: koihsw00-0000-4000-8000-000000000027
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000027
+      version: -1
+      name: Response gate enabled?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: inputs.enable_response_gate. When false, the sweep summarizes and closes without routing any match to response.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.enable_response_gate
+          operator: isEqualString
+          right:
+            value:
+              simple: 'true'
+    nexttasks:
+      'yes':
+      - '28'
+      '#default#':
+      - '50'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2120
+        }
+      }
+  '28':
+    id: '28'
+    taskid: koihsw00-0000-4000-8000-000000000028
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000028
+      version: -1
+      name: Load the min-risk map
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Maps min_risk to the set of risk levels at or above it.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiRiskMapRaw
+      value:
+        simple: '[{"min":"critical","levels":["critical"]},{"min":"high","levels":["critical","high"]},{"min":"medium","levels":["critical","high","medium"]},{"min":"low","levels":["critical","high","medium","low"]}]'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '29'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2265
+        }
+      }
+  '29':
+    id: '29'
+    taskid: koihsw00-0000-4000-8000-000000000029
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000029
+      version: -1
+      name: Parse the min-risk map
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Parses the JSON map.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiRiskMap
+      value:
+        complex:
+          root: KoiRiskMapRaw
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '31'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2410
+        }
+      }
+  '31':
+    id: '31'
+    taskid: koihsw00-0000-4000-8000-000000000031
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000031
+      version: -1
+      name: Resolve allowed risk levels
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The risk levels eligible for routing, given inputs.min_risk (default high -> critical,high).
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: AllowedRisk
+      value:
+        complex:
+          root: KoiRiskMap
+          accessor: levels
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiRiskMap.min
+              operator: isEqualString
+              right:
+                iscontext: true
+                value:
+                  simple: inputs.min_risk
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '32'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2555
+        }
+      }
+  '32':
+    id: '32'
+    taskid: koihsw00-0000-4000-8000-000000000032
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000032
+      version: -1
+      name: Select route candidates
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: 'Filters the investigated matches to the ones eligible for the analyst-gated block: known_bad, ungoverned, with a KOI item id, whose risk meets min_risk. Burst (H1.3) and shadow (H4.2) matches are known_bad=false and are never routed.'
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: RouteCandidates
+      value:
+        complex:
+          root: KoiHunt.Matches
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiHunt.Matches.known_bad
+              operator: isEqualString
+              right:
+                value:
+                  simple: 'true'
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiHunt.Matches.governed
+              operator: isEqualString
+              right:
+                value:
+                  simple: ungoverned
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiHunt.Matches.item_id
+              operator: isNotEmpty
+              right:
+                value: {}
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiHunt.Matches.risk
+              operator: inList
+              right:
+                iscontext: true
+                value:
+                  simple: AllowedRisk
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '33'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2700
+        }
+      }
+  '33':
+    id: '33'
+    taskid: koihsw00-0000-4000-8000-000000000033
+    type: condition
+    task:
+      id: koihsw00-0000-4000-8000-000000000033
+      version: -1
+      name: Any route candidates?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: True if at least one match is a confirmed known-bad, ungoverned item meeting min_risk.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: RouteCandidates
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      'yes':
+      - '34'
+      '#default#':
+      - '35'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 2845
+        }
+      }
+  '34':
+    id: '34'
+    taskid: koihsw00-0000-4000-8000-000000000034
+    type: playbook
+    task:
+      id: koihsw00-0000-4000-8000-000000000034
+      version: -1
+      name: Analyst-gated block (KOI Ext - Block and Remediate)
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Block and Remediate
+      description: 'For each route candidate, runs KOI Ext - Block and Remediate with auto_block=false: it re-investigates, short-circuits if already blocked, and presents the analyst approval gate; the blocklist write fires ONLY on approval. This gate is a governance control - a scheduled sweep must never auto-block, so auto_block is hard-wired false here.'
+    separatecontext: true
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      item_id:
+        complex:
+          root: RouteCandidates
+          accessor: item_id
+      marketplace:
+        complex:
+          root: RouteCandidates
+          accessor: marketplace
+      reason:
+        complex:
+          root: RouteCandidates
+          accessor: reason
+      auto_block:
+        simple: 'false'
+      created_by:
+        simple: xsoar-koi-hunt-sweep
+      instance_name:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#none#':
+      - '50'
+    loop:
+      forEach: true
+      iscommand: false
+      exitCondition: ''
+      wait: 1
+      max: ${inputs.max_matches_to_investigate}
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 350,
+          "y": 2990
+        }
+      }
+  '35':
+    id: '35'
+    taskid: koihsw00-0000-4000-8000-000000000035
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000035
+      version: -1
+      name: No route candidates
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: Note when nothing met the routing criteria.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        simple: 'KOI Ext - Hunt Sweep: no ungoverned known-bad matches met the routing criteria (min_risk=${inputs.min_risk}); nothing routed to response.'
+    nexttasks:
+      '#none#':
+      - '50'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 600,
+          "y": 2990
+        }
+      }
+  '60':
+    id: '60'
+    taskid: koihsw00-0000-4000-8000-000000000060
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000060
+      version: -1
+      name: Combine raw matches (H2.1)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: 'Auto-investigation disabled: concatenate the raw hunt rows for a summary-only table.'
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: RawMatches
+      value:
+        complex:
+          root: HuntResults.h21
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '61'
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 1660
+        }
+      }
+  '61':
+    id: '61'
+    taskid: koihsw00-0000-4000-8000-000000000061
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000061
+      version: -1
+      name: Combine raw matches (H2.6)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Append H2.6 rows.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: RawMatches
+      value:
+        complex:
+          root: HuntResults.h26
+      append:
+        simple: 'true'
+    nexttasks:
+      '#none#':
+      - '62'
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 1805
+        }
+      }
+  '62':
+    id: '62'
+    taskid: koihsw00-0000-4000-8000-000000000062
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000062
+      version: -1
+      name: Combine raw matches (H1.3)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Append H1.3 rows.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: RawMatches
+      value:
+        complex:
+          root: HuntResults.h13
+      append:
+        simple: 'true'
+    nexttasks:
+      '#none#':
+      - '63'
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 1950
+        }
+      }
+  '63':
+    id: '63'
+    taskid: koihsw00-0000-4000-8000-000000000063
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000063
+      version: -1
+      name: Combine raw matches (H4.2)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Append H4.2 rows.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: RawMatches
+      value:
+        complex:
+          root: HuntResults.h42
+      append:
+        simple: 'true'
+    nexttasks:
+      '#none#':
+      - '64'
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 2095
+        }
+      }
+  '64':
+    id: '64'
+    taskid: koihsw00-0000-4000-8000-000000000064
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000064
+      version: -1
+      name: Post raw matches (not investigated)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: 'auto_investigate=false: post the raw matches without investigating or routing.'
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        simple: '## KOI Ext - Hunt Sweep - matches found (auto-investigation disabled)
+
+          The hunts returned matches but auto_investigate=false, so they were not investigated or routed. Raw rows:'
+    nexttasks:
+      '#none#':
+      - '65'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 2240
+        }
+      }
+  '65':
+    id: '65'
+    taskid: koihsw00-0000-4000-8000-000000000065
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000065
+      version: -1
+      name: Post raw matches table
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: Raw match rows as a table.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        complex:
+          root: RawMatches
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '50'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 200,
+          "y": 2385
+        }
+      }
+  '40':
+    id: '40'
+    taskid: koihsw00-0000-4000-8000-000000000040
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000040
+      version: -1
+      name: 'Post: XQL engine unavailable'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: The Cortex XDR - XQL Query Engine is absent (or no hunts selected); the sweep is skipped.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        simple: '## KOI Ext - Hunt Sweep
+
+          **XQL engine unavailable - hunt sweep skipped.** No xdr-xql-generic-query result was produced, so the Cortex XDR - XQL Query Engine is not installed/enabled on this tenant (or hunt_set selected no hunts). Install the engine to run the scheduled hunt sweep.'
+    nexttasks:
+      '#none#':
+      - '50'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 900,
+          "y": 835
+        }
+      }
+  '45':
+    id: '45'
+    taskid: koihsw00-0000-4000-8000-000000000045
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000045
+      version: -1
+      name: 'Post: hunt sweep clean'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: Print
+      description: The selected hunts ran and returned zero matches.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      value:
+        simple: '## KOI Ext - Hunt Sweep
+
+          **Hunt sweep clean.** The selected hunts (${inputs.hunt_set}) ran over ${inputs.xql_time_frame} and returned no matches.'
+    nexttasks:
+      '#none#':
+      - '50'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 1500
+        }
+      }
+  '50':
+    id: '50'
+    taskid: koihsw00-0000-4000-8000-000000000050
+    type: regular
+    task:
+      id: koihsw00-0000-4000-8000-000000000050
+      version: -1
+      name: Close the investigation
+      iscommand: true
+      brand: Builtin
+      type: regular
+      script: Builtin|||closeInvestigation
+      description: commands.local.cmd.close.inv
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments: {}
+    nexttasks:
+      '#none#':
+      - '51'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 3200
+        }
+      }
+  '51':
+    id: '51'
+    taskid: koihsw00-0000-4000-8000-000000000051
+    type: title
+    task:
+      id: koihsw00-0000-4000-8000-000000000051
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 3345
+        }
+      }
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 3450,
+        "width": 1100,
+        "x": 50,
+        "y": 50
+      }
+    }
+  }
+inputs:
+- key: hunt_set
+  value:
+    simple: H2.1,H2.6,H1.3,H4.2
+  required: false
+  description: 'Which hunts to run, as a comma-separated set of hunt ids (default the four validated high-signal hunts: H2.1, H2.6, H1.3, H4.2). Tune which hunts run WITHOUT editing the playbook - e.g. set it to a subset, or point it at a List value (${lists.<name>}) that holds the set. A hunt runs only if its id appears in this string.'
+  playbookInputQuery: null
+- key: min_risk
+  value:
+    simple: high
+  required: false
+  description: 'Minimum item risk level eligible for the analyst-gated response route: critical, high (default), medium or low. Matches below this level are still investigated and summarized, but not routed to KOI Ext - Block and Remediate.'
+  playbookInputQuery: null
+- key: xql_time_frame
+  value:
+    simple: 7 days
+  required: false
+  description: Relative time frame for every hunt XQL query (e.g. '24 hours', '7 days'), passed to xdr-xql-generic-query. The hunt bodies are otherwise verbatim.
+  playbookInputQuery: null
+- key: auto_investigate
+  value:
+    simple: 'true'
+  required: false
+  description: true (default) investigates every match and routes eligible ones; false posts the raw matches and closes without investigating or routing.
+  playbookInputQuery: null
+- key: max_matches_to_investigate
+  value:
+    simple: '25'
+  required: false
+  description: Safety cap on how many matches PER HUNT are investigated (and per hunt routed to response), so a scheduled sweep never fans out unbounded. Default 25. Wired to the forEach loops' max. Each hunt body also carries its own XQL 'limit' (100-200) as a hard backstop, so fan-out is bounded even if this value is misconfigured.
+  playbookInputQuery: null
+- key: enable_response_gate
+  value:
+    simple: 'true'
+  required: false
+  description: true (default) routes confirmed known-bad, ungoverned matches to the analyst-gated KOI Ext - Block and Remediate (auto_block=false); false summarizes only.
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty for the single configured instance.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiHunt.Matches
+  description: The normalized array of every hunt match with its investigation verdict (hunt_id, match_kind, known_bad, item_id, item_name, marketplace, hostname, risk, reason, org_risk_level, exposure, governed, recommendation).
+  type: unknown
+- contextPath: RouteCandidates
+  description: The subset of matches routed to the analyst-gated block (known_bad, ungoverned, meeting min_risk).
+  type: unknown
+- contextPath: KoiBlock.status
+  description: Outcome of any analyst-gated block per routed match.
+  type: string
+tags:
+- koi
+- koi-ext
+- job
+quiet: false
