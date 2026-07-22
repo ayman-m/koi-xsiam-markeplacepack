@@ -1,0 +1,1343 @@
+id: KOI Ext - Hunt Match Investigation
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Hunt Match Investigation
+description: |-
+  Sub-playbook of KOI Ext - Hunt Sweep, for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands).
+
+  Takes ONE hunt match (the raw XQL row, passed whole as the `match` input, plus hunt_id, match_kind and known_bad) and returns one normalized KoiHunt.Matches verdict object. The whole row is passed and its fields are read here by coalesce, so the four hunts' differing column names (item_id / item_key / object_id; alert_host / agent_hostname / host_list; item_risk) are all handled in one place with no forEach column desync.
+
+  For an ITEM match it runs KOI Ext - Investigate Item (org risk, endpoint/blast radius, and blocklist/allowlist governance via koi-inventory-list / koi-inventory-item-endpoints-list / koi-blocklist-get / koi-allowlist-get). For a HOST/shadow match (H4.2) it gathers host context with the Cortex-native core-get-endpoints and RECOMMENDS - never auto-runs - a core-script-run of the KOI deployment script to refresh a stale host.
+
+  MARKETPLACE VOCABULARY: the raw event `marketplace` is a SHORT form (software_windows, chrome, vsc). It is mapped to the API long form (windows, chrome_web_store, vscode) with the same table the parsing rule and KOI Ext - Investigate Item use, before it is handed to any koi- command. built_in / side_loaded / ollama have no API value and map to empty (unknown -> resolved from inventory). Every command task is continueonerror so one failed enrichment never aborts the sweep.
+starttaskid: '0'
+tasks:
+  '0':
+    id: '0'
+    taskid: koihmi00-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koihmi00-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+      description: ''
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    nexttasks:
+      '#none#':
+      - '1'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 50
+        }
+      }
+  '1':
+    id: '1'
+    taskid: koihmi00-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000001
+      version: -1
+      name: Normalize item_id
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: coalesce(match.item_id, match.item_key, match.object_id) - H2.1 uses item_id, H2.6 item_key, H1.3 object_id; a host/shadow match (H4.2) has none, so this is empty.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.item_id
+      value:
+        complex:
+          root: inputs.match
+          accessor: item_id
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.item_key}
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.object_id}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '2'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 195
+        }
+      }
+  '2':
+    id: '2'
+    taskid: koihmi00-0000-4000-8000-000000000002
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000002
+      version: -1
+      name: Normalize item_name
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: coalesce(match.item_name, match.object_name, match.exec_token).
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.item_name
+      value:
+        complex:
+          root: inputs.match
+          accessor: item_name
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.object_name}
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.exec_token}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '3'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 340
+        }
+      }
+  '3':
+    id: '3'
+    taskid: koihmi00-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000003
+      version: -1
+      name: Normalize marketplace (raw event form)
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The raw short-form marketplace from the row (only H2.1 carries one, already the API long form). Coerced to a scalar; mapped to the API vocabulary in a later task.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: Norm.marketplace_raw
+      value:
+        complex:
+          root: inputs.match
+          accessor: marketplace
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '4'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 485
+        }
+      }
+  '4':
+    id: '4'
+    taskid: koihmi00-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000004
+      version: -1
+      name: Normalize hostname
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: coalesce(match.alert_host, match.agent_hostname, match.host_list) joined to a scalar. H1.3 carries an array of hosts (host_list); it is joined for display.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.hostname
+      value:
+        complex:
+          root: inputs.match
+          accessor: alert_host
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.agent_hostname}
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.host_list}
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ', '
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '5'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 630
+        }
+      }
+  '5':
+    id: '5'
+    taskid: koihmi00-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000005
+      version: -1
+      name: Normalize risk
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: coalesce(match.item_risk, match.risk_level). H1.3/H4.2 carry no per-item risk, so this is empty and org risk from the investigation is used instead.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.risk
+      value:
+        complex:
+          root: inputs.match
+          accessor: item_risk
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${inputs.match.risk_level}
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '6'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 775
+        }
+      }
+  '6':
+    id: '6'
+    taskid: koihmi00-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000006
+      version: -1
+      name: Carry hunt_id
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The hunt that produced this match.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.hunt_id
+      value:
+        simple: ${inputs.hunt_id}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '7'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 920
+        }
+      }
+  '7':
+    id: '7'
+    taskid: koihmi00-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000007
+      version: -1
+      name: Carry match_kind
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: item or host - selects the investigation path.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.match_kind
+      value:
+        simple: ${inputs.match_kind}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '8'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1065
+        }
+      }
+  '8':
+    id: '8'
+    taskid: koihmi00-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000008
+      version: -1
+      name: Carry known_bad
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: true for the compromise-grade hunts (H2.1, H2.6); false for burst/shadow hunts. Only known_bad matches are eligible for the analyst-gated response route in the parent.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.known_bad
+      value:
+        simple: ${inputs.known_bad}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '9'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1210
+        }
+      }
+  '9':
+    id: '9'
+    taskid: koihmi00-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000009
+      version: -1
+      name: Carry reason
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Human-readable reason the hunt fired.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.reason
+      value:
+        simple: ${inputs.reason}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '10'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1355
+        }
+      }
+  '10':
+    id: '10'
+    taskid: koihmi00-0000-4000-8000-000000000010
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000010
+      version: -1
+      name: Load the marketplace vocabulary map
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Same short->API marketplace table used by the parsing rule and KOI Ext - Investigate Item.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiMpMapRaw
+      value:
+        simple: '[{"src":"software_windows","api":"windows"},{"src":"software_mac","api":"mac"},{"src":"vsc","api":"vscode"},{"src":"jet","api":"jetbrains"},{"src":"npp","api":"notepad++"},{"src":"openvsx","api":"open_vsx_registry"},{"src":"chrome","api":"chrome_web_store"},{"src":"edge","api":"edge_add_ons"},{"src":"firefox","api":"firefox_add_ons"},{"src":"github","api":"github_mcp_registry"},{"src":"npm","api":"npm"},{"src":"pypi","api":"pypi"},{"src":"homebrew","api":"homebrew"},{"src":"chocolatey","api":"chocolatey"},{"src":"cursor","api":"cursor"},{"src":"docker","api":"docker"},{"src":"claude_desktop_extensions","api":"claude_desktop_extensions"},{"src":"chrome_web_store","api":"chrome_web_store"},{"src":"edge_add_ons","api":"edge_add_ons"},{"src":"firefox_add_ons","api":"firefox_add_ons"},{"src":"github_mcp_registry","api":"github_mcp_registry"},{"src":"hugging_face","api":"hugging_face"},{"src":"jetbrains","api":"jetbrains"},{"src":"linux","api":"linux"},{"src":"mac","api":"mac"},{"src":"notepad++","api":"notepad++"},{"src":"office_add_ins","api":"office_add_ins"},{"src":"open_vsx_registry","api":"open_vsx_registry"},{"src":"visual_studio","api":"visual_studio"},{"src":"vscode","api":"vscode"},{"src":"windows","api":"windows"},{"src":"windsurf","api":"windsurf"}]'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '11'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1500
+        }
+      }
+  '11':
+    id: '11'
+    taskid: koihmi00-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000011
+      version: -1
+      name: Parse the marketplace vocabulary map
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Parses the JSON table into an array.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiMpMap
+      value:
+        complex:
+          root: KoiMpMapRaw
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '12'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1645
+        }
+      }
+  '12':
+    id: '12'
+    taskid: koihmi00-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000012
+      version: -1
+      name: Map marketplace to the API vocabulary
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Looks up the raw marketplace in the table and emits the API long form. Empty when the value is absent or has no API equivalent (built_in / side_loaded / ollama) - treated as unknown, so the koi- commands resolve it from the org inventory instead of failing with HTTP 400.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.marketplace
+      value:
+        complex:
+          root: KoiMpMap
+          accessor: api
+          filters:
+          - - left:
+                iscontext: true
+                value:
+                  simple: KoiMpMap.src
+              operator: isEqualString
+              right:
+                iscontext: true
+                value:
+                  simple: Norm.marketplace_raw
+          - - left:
+                iscontext: true
+                value:
+                  simple: Norm.marketplace_raw
+              operator: isNotEmpty
+              right:
+                value: {}
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '13'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1790
+        }
+      }
+  '13':
+    id: '13'
+    taskid: koihmi00-0000-4000-8000-000000000013
+    type: condition
+    task:
+      id: koihmi00-0000-4000-8000-000000000013
+      version: -1
+      name: Item match or host match?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: item matches (H2.1/H2.6/H1.3) run the KOI item investigation; host/shadow matches (H4.2) get Cortex host context via core-get-endpoints.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: item
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: inputs.match_kind
+          operator: isEqualString
+          right:
+            value:
+              simple: item
+    nexttasks:
+      item:
+      - '14'
+      '#default#':
+      - '20'
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 1935
+        }
+      }
+  '14':
+    id: '14'
+    taskid: koihmi00-0000-4000-8000-000000000014
+    type: playbook
+    task:
+      id: koihmi00-0000-4000-8000-000000000014
+      version: -1
+      name: Investigate the item (KOI Ext - Investigate Item)
+      iscommand: false
+      brand: ''
+      type: playbook
+      playbookId: KOI Ext - Investigate Item
+      description: 'Full KOI investigation of the item: org inventory record (org risk, endpoint/blast radius, findings) and blocklist/allowlist governance. Reuses the existing sub-playbook rather than duplicating enrichment. continueonerror so an inventory miss never aborts the sweep.'
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      item_id:
+        simple: ${KoiHunt.Matches.item_id}
+      marketplace:
+        simple: ${KoiHunt.Matches.marketplace}
+      version:
+        simple: ${inputs.version}
+      instance_name:
+        simple: ${inputs.instance_name}
+      xql_time_frame:
+        simple: ${inputs.xql_time_frame}
+    nexttasks:
+      '#none#':
+      - '15'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 250,
+          "y": 2080
+        }
+      }
+  '15':
+    id: '15'
+    taskid: koihmi00-0000-4000-8000-000000000015
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000015
+      version: -1
+      name: Record org risk level
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: KOI's organization risk for the item (there is no catalog risk in this pack).
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.org_risk_level
+      value:
+        simple: ${KoiInvestigation.org_risk_level}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '16'
+    view: |-
+      {
+        "position": {
+          "x": 250,
+          "y": 2225
+        }
+      }
+  '16':
+    id: '16'
+    taskid: koihmi00-0000-4000-8000-000000000016
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000016
+      version: -1
+      name: Record blast radius
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Org-wide endpoint count carrying the item (its blast radius).
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.exposure
+      value:
+        simple: ${KoiInvestigation.endpoint_count}
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '17'
+    view: |-
+      {
+        "position": {
+          "x": 250,
+          "y": 2370
+        }
+      }
+  '17':
+    id: '17'
+    taskid: koihmi00-0000-4000-8000-000000000017
+    type: condition
+    task:
+      id: koihmi00-0000-4000-8000-000000000017
+      version: -1
+      name: Already on the blocklist?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: KoiInvestigation.blocklisted_count > 0 means the item is already governed by a block.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiInvestigation.blocklisted_count
+          operator: greaterThan
+          right:
+            value:
+              simple: '0'
+    nexttasks:
+      'yes':
+      - '18'
+      '#default#':
+      - '19'
+    view: |-
+      {
+        "position": {
+          "x": 250,
+          "y": 2515
+        }
+      }
+  '18':
+    id: '18'
+    taskid: koihmi00-0000-4000-8000-000000000018
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000018
+      version: -1
+      name: 'Governance: blocklisted'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The item is already on the org blocklist.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.governed
+      value:
+        simple: blocklisted
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '24'
+    view: |-
+      {
+        "position": {
+          "x": 100,
+          "y": 2660
+        }
+      }
+  '19':
+    id: '19'
+    taskid: koihmi00-0000-4000-8000-000000000019
+    type: condition
+    task:
+      id: koihmi00-0000-4000-8000-000000000019
+      version: -1
+      name: Explicitly allowlisted?
+      iscommand: false
+      brand: ''
+      type: condition
+      description: KoiInvestigation.allowlisted_count > 0 means the item is explicitly allowed.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiInvestigation.allowlisted_count
+          operator: greaterThan
+          right:
+            value:
+              simple: '0'
+    nexttasks:
+      'yes':
+      - '21'
+      '#default#':
+      - '22'
+    view: |-
+      {
+        "position": {
+          "x": 400,
+          "y": 2660
+        }
+      }
+  '21':
+    id: '21'
+    taskid: koihmi00-0000-4000-8000-000000000021
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000021
+      version: -1
+      name: 'Governance: allowlisted'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The item is explicitly on the org allowlist.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.governed
+      value:
+        simple: allowlisted
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '24'
+    view: |-
+      {
+        "position": {
+          "x": 300,
+          "y": 2805
+        }
+      }
+  '22':
+    id: '22'
+    taskid: koihmi00-0000-4000-8000-000000000022
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000022
+      version: -1
+      name: 'Governance: ungoverned'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Neither blocklisted nor allowlisted - no governance. A known-bad ungoverned item is the response-route candidate.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.governed
+      value:
+        simple: ungoverned
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '24'
+    view: |-
+      {
+        "position": {
+          "x": 500,
+          "y": 2805
+        }
+      }
+  '24':
+    id: '24'
+    taskid: koihmi00-0000-4000-8000-000000000024
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000024
+      version: -1
+      name: Item recommendation
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Recommended next action for an item match, keyed on its governance state.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.recommendation
+      value:
+        simple: 'Governance: ${KoiHunt.Matches.governed}. If ungoverned AND known-bad, this match is routed to KOI Ext - Block and Remediate with auto_block=false (analyst approval required).'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '40'
+    view: |-
+      {
+        "position": {
+          "x": 400,
+          "y": 2950
+        }
+      }
+  '20':
+    id: '20'
+    taskid: koihmi00-0000-4000-8000-000000000020
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000020
+      version: -1
+      name: Gather host context (core-get-endpoints)
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||core-get-endpoints'
+      description: 'Cortex-native host context for a shadow/host match (H4.2 carries no KOI item id). continueonerror: Core may be absent.'
+    separatecontext: false
+    continueonerrortype: errorPath
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      hostname:
+        simple: ${KoiHunt.Matches.hostname}
+    nexttasks:
+      '#error#':
+      - '23'
+      '#none#':
+      - '23'
+    continueonerror: true
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 2080
+        }
+      }
+  '23':
+    id: '23'
+    taskid: koihmi00-0000-4000-8000-000000000023
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000023
+      version: -1
+      name: Record host findings
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Host/shadow matches have no org item record; capture endpoint status and mark governance n/a.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.org_risk_level
+      value:
+        simple: n/a (host/shadow match)
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '25'
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 2225
+        }
+      }
+  '25':
+    id: '25'
+    taskid: koihmi00-0000-4000-8000-000000000025
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000025
+      version: -1
+      name: Record endpoint status
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: The Cortex endpoint status for the host (connected/disconnected), for the war-room row.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.exposure
+      value:
+        complex:
+          root: Core.Endpoint
+          accessor: endpoint_status
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: ${Endpoint.endpoint_status}
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: n/a
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ', '
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '26'
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 2370
+        }
+      }
+  '26':
+    id: '26'
+    taskid: koihmi00-0000-4000-8000-000000000026
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000026
+      version: -1
+      name: 'Governance: n/a (host)'
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Governance does not apply to a host/shadow match.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.governed
+      value:
+        simple: n/a (host)
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '27'
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 2515
+        }
+      }
+  '27':
+    id: '27'
+    taskid: koihmi00-0000-4000-8000-000000000027
+    type: regular
+    task:
+      id: koihmi00-0000-4000-8000-000000000027
+      version: -1
+      name: Host recommendation
+      iscommand: false
+      brand: ''
+      type: regular
+      script: SetAndHandleEmpty
+      description: Recommended action for a shadow/host match. core-script-run is SURFACED, never auto-run.
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiHunt.Matches.recommendation
+      value:
+        simple: Shadow agentic software on a KOI-covered host. Review the core-get-endpoints context. If the host's KOI inventory is stale, a core-script-run of the KOI deployment script can refresh it - RECOMMENDED ONLY, do not auto-run from a scheduled sweep.
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '40'
+    view: |-
+      {
+        "position": {
+          "x": 700,
+          "y": 2660
+        }
+      }
+  '40':
+    id: '40'
+    taskid: koihmi00-0000-4000-8000-000000000040
+    type: title
+    task:
+      id: koihmi00-0000-4000-8000-000000000040
+      version: -1
+      name: Done
+      iscommand: false
+      brand: ''
+      type: title
+    separatecontext: false
+    continueonerrortype: ''
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    view: |-
+      {
+        "position": {
+          "x": 470,
+          "y": 3100
+        }
+      }
+view: |-
+  {
+    "linkLabelsPosition": {},
+    "paper": {
+      "dimensions": {
+        "height": 3200,
+        "width": 1000,
+        "x": 50,
+        "y": 50
+      }
+    }
+  }
+inputs:
+- key: match
+  value: {}
+  required: true
+  description: The raw hunt match row (one element of a hunt's XQL results), passed whole. Its fields are read here by coalesce so the four hunts' differing column names are all handled in one place.
+  playbookInputQuery: null
+- key: hunt_id
+  value: {}
+  required: true
+  description: The hunt that produced this match (e.g. H2.1).
+  playbookInputQuery: null
+- key: match_kind
+  value:
+    simple: item
+  required: true
+  description: item (H2.1/H2.6/H1.3) or host (H4.2). Selects the investigation path.
+  playbookInputQuery: null
+- key: known_bad
+  value:
+    simple: 'false'
+  required: false
+  description: true for compromise-grade hunts (H2.1, H2.6). Only known_bad matches are eligible for the parent's analyst-gated response route.
+  playbookInputQuery: null
+- key: reason
+  value: {}
+  required: false
+  description: Human-readable reason the hunt fired, recorded on the match row.
+  playbookInputQuery: null
+- key: version
+  value: {}
+  required: false
+  description: Optional item version to investigate; when empty the org inventory version is used.
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: The KOI integration instance to use. Leave empty for the single configured instance.
+  playbookInputQuery: null
+- key: xql_time_frame
+  value:
+    simple: 7 days
+  required: false
+  description: Time frame for the optional XDR runtime-evidence XQL inside KOI Ext - Investigate Item.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiHunt.Matches
+  description: 'One normalized hunt-match verdict object: hunt_id, match_kind, known_bad, item_id, item_name, marketplace (API form), hostname, risk, reason, org_risk_level, exposure, governed and recommendation. Accumulated into an array by the parent across all matches.'
+  type: unknown
+- contextPath: KoiHunt.Matches.hunt_id
+  description: The hunt that produced the match.
+  type: string
+- contextPath: KoiHunt.Matches.item_id
+  description: Normalized KOI item id (empty for a host/shadow match).
+  type: string
+- contextPath: KoiHunt.Matches.marketplace
+  description: Marketplace in the API vocabulary (empty when unknown).
+  type: string
+- contextPath: KoiHunt.Matches.governed
+  description: blocklisted / allowlisted / ungoverned / n/a (host).
+  type: string
+- contextPath: KoiHunt.Matches.recommendation
+  description: Recommended next action for the match.
+  type: string
+tags:
+- koi
+- koi-ext
+quiet: false
