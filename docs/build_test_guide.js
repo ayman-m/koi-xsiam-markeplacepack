@@ -97,6 +97,27 @@ const PACK_VER = PACK.pack.currentVersion;
 const PACK_ID = `Marketplace KOI pack v${PACK_VER}  ·  demisto/content ${PACK.source.path}`;
 
 /* ======================================================================
+   Source of truth #2 — the optional companion pack, read from disk so its
+   component counts are never hand-typed. This is SEPARATE, additional content
+   (VERIFIED_FACTS §7a): it ships no integration and no koi-* command, it layers
+   parsing / modeling rules, playbooks and a dashboard on top of THIS integration,
+   and it declares a mandatory dependency on the KOI pack. It is NOT part of the
+   Marketplace KOI pack, and it is NOT the conflicting custom v1.3.0 pack.
+   ====================================================================== */
+const EXT_DIR = path.join(__dirname, "..", "Packs", "KoiContentExtension");
+const EXT = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "pack_metadata.json"), "utf8"));
+const EXT_ID = path.basename(EXT_DIR); // "KoiContentExtension"
+const nExtPlaybooks = fs.readdirSync(path.join(EXT_DIR, "Playbooks")).filter((f) => /\.yml$/.test(f)).length;
+const nExtDashboards = fs.readdirSync(path.join(EXT_DIR, "XSIAMDashboards")).filter((f) => /\.json$/.test(f)).length;
+const extHasParsing = fs.existsSync(path.join(EXT_DIR, "ParsingRules"));
+const extHasModeling = fs.existsSync(path.join(EXT_DIR, "ModelingRules"));
+if (nExtPlaybooks !== 10) throw new Error(`Companion pack: expected 10 playbooks, got ${nExtPlaybooks}`);
+if (nExtDashboards !== 1) throw new Error(`Companion pack: expected exactly 1 dashboard, got ${nExtDashboards}`);
+if (!extHasParsing || !extHasModeling) throw new Error("Companion pack must ship parsing AND modeling rules");
+if (!(EXT.dependencies && EXT.dependencies.Koi && EXT.dependencies.Koi.mandatory === true))
+  throw new Error("Companion pack must declare a mandatory dependency on the KOI pack");
+
+/* ======================================================================
    Presentation layer — palette and helpers from the custom-pack generator
    ====================================================================== */
 const pres = new pptxgen();
@@ -286,12 +307,24 @@ const precond = (s, text, y = 1.42) =>
   s.addText(
     `Ten tests for the official pack from demisto/content — ${PACK.source.path} — ` +
     `pack version ${PACK_VER}, ${PACK.counts.commands} commands, integration only. ` +
-    "This is NOT the custom in-house KOI pack (v1.3.0, 26 commands): both present as \"KOI\", " +
-    "so test 1 exists purely to tell them apart.",
+    "NOT the custom in-house KOI pack (v1.3.0, 26 commands); both present as \"KOI\" " +
+    "(test 1 tells them apart).",
     {
-      x: M, y: 3.42, w: 8.5, h: 1.3, fontSize: 15, color: BODY, fontFace: F,
+      x: M, y: 3.42, w: 8.5, h: 1.0, fontSize: 15, color: BODY, fontFace: F,
       margin: 0, lineSpacing: 21, valign: "top",
     }
+  );
+  /* A THIRD pack gets a one-line mention here so a reader knows the content layer exists
+     without confusing it with either the pack under test or the conflicting custom pack.
+     Name and counts are read from Packs/KoiContentExtension at build time (VERIFIED_FACTS §7a). */
+  s.addText(
+    [
+      { text: "Optional companion pack: ", options: { bold: true, color: GREEN } },
+      { text: `${EXT.name} (${EXT_ID} v${EXT.currentVersion}, ${EXT.support} support) layers parsing & modeling ` +
+        `rules, ${nExtPlaybooks} playbooks and a dashboard on top of this integration — SEPARATE, additional ` +
+        `content, not part of this pack and not the custom v1.3.0 pack.`, options: { color: BODY } },
+    ],
+    { x: M, y: 4.42, w: 8.6, h: 0.5, fontSize: 10.5, italic: true, fontFace: F, margin: 0, lineSpacing: 12.5, valign: "top" }
   );
   const stats = [
     ["10", "tests"],
@@ -308,7 +341,7 @@ const precond = (s, text, y = 1.42) =>
   s.addText(
     `Command surface generated at build time from reference/marketplace-pack.json  ` +
     `(upstream ${PACK.source.repo} ${PACK.source.path}, md5 ${PACK.source.md5}, checked against master ${PACK.source.verified_against_master}). ` +
-    "Tenant observations cited to VERIFIED_FACTS.md, verified 20 July 2026.",
+    "Tenant observations cited to VERIFIED_FACTS.md, verified 20–21 July 2026.",
     /* Stops short of 11.2in: the orange ring crosses that x at this height and the
        provenance line was being drawn straight through it. */
     { x: M, y: 6.24, w: 10.4, h: 0.6, fontSize: 9.5, italic: true, color: MUTED, fontFace: F, margin: 0, lineSpacing: 12, valign: "top" }
@@ -317,7 +350,10 @@ const precond = (s, text, y = 1.42) =>
     "Scope honestly: this pack ships an integration and nothing else — no playbooks, no parsing rules, " +
     "no modeling rules, no dashboard. Tests 1-2 prove identity and connectivity, 3-8 the command surface, " +
     "9-10 event collection. The triage / investigation / gated-response tests from the custom pack are absent " +
-    "because the commands they depend on do not exist here."
+    "because the commands they depend on do not exist here. " +
+    `The optional companion pack ${EXT_ID} ("${EXT.name}", v${EXT.currentVersion}) is named on the cover as ` +
+    "SEPARATE additional content — it adds the parsing/modeling rules, playbooks and dashboard this integration " +
+    "omits, depends on this pack, and must not be confused with the conflicting custom v1.3.0 pack (VERIFIED_FACTS §7a)."
   );
 }
 
@@ -437,7 +473,7 @@ const precond = (s, text, y = 1.42) =>
       `${cfgByName.event_types_to_fetch.display} set — default is ${cfgByName.event_types_to_fetch.defaultvalue}`,
       "At least two completed fetch cycles",
       "XQL search access on the tenant",
-      "Real activity in KOI in the window you query — an idle tenant legitimately returns nothing",
+      "A KOI scan has run on a monitored host and a real change occurred there — koi_koi_raw moves only then (§7b/§8)",
     ]],
   ];
   const cw = (W - 0.4) / 2;
@@ -767,8 +803,8 @@ testSlide(
     "results from a valid filter is a correct answer."
   ).addNotes(
     "The exact filter on the slide was sent to the API on 20 July 2026 and returned total_count 145 on KOI_PAET " +
-    "and 75 on KOI_PLTS (VERIFIED_FACTS §5.3, evidence/followup-probes.json). Each is a single reading on a named " +
-    "instance, and KOI_PLTS was separately seen to grow between sweeps — the point is that the filter parses and " +
+    "(VERIFIED_FACTS §5.3). Only KOI_PAET is verified for this filter — the KOI_PLTS value is not in the evidence " +
+    "base, so it is not quoted here or on the reference-values slide. The point is that the filter parses and " +
     "the response carries a total_count, not the value. " +
     "Step 2 is deliberately not a pass/fail: no comparison between " +
     "koi-inventory-search with a risk_level=high filter and koi-inventory-list risk_level=high was ever run, so " +
@@ -930,36 +966,89 @@ testSlide(
   );
 }
 
+/* ============================ 14b. Detection testing — precondition for tests 9-10 ============================ */
+/* Findings folded in here: run-on-demand scan (VERIFIED_FACTS §7b, §8), the PATH-not-process rule
+   (§7b(6), §7d.1, §7d.2) and the event-vs-inventory latency split (§7d.3). Placed immediately before
+   the event-collection tests because all three change what "an empty result" means. Live figures
+   dated 21 July 2026. */
+{
+  const s = newSlide();
+  heading(s, "Before tests 9-10", "How to make koi_koi_raw actually move");
+  s.addText(
+    "Tests 9 and 10 read a dataset that only fills under specific conditions. Get these three wrong and a healthy " +
+    "pack looks broken. All three were established on a live tenant on 21 July 2026.",
+    { x: M, y: 1.36, w: W, h: 0.42, fontSize: 11.5, color: BODY, fontFace: F, margin: 0, lineSpacing: 15, valign: "top" }
+  );
+  const cards = [
+    ["1", "KOI is run-on-demand — trigger a scan, and change something", AMBER,
+      "KOI has no resident Windows agent. koi_koi_raw updates only after a scan runs — core-script-run of " +
+      "\"KOI Deployment Script - Windows\" (COMPLETED_SUCCESSFULLY in ~135s). Both test hosts went six days with no " +
+      "events until a scan ran — nothing was wrong with them. And it is change-driven, not scan-driven: a scan of an " +
+      "UNCHANGED host produced no events at all. A quiet host returning an empty dataset is correct, not a failure (§7b, §8)."],
+    ["2", "Detection follows the PATH, not the installing process identity", CYAN,
+      "A change is inventoried only if it lands in a USER-profile path; a SYSTEM-profile install is invisible. A " +
+      "controlled three-way test settled it: tabulate 0.9.0 written to the SYSTEM profile → 404, not detected; " +
+      "inflection 0.5.1 and a git clone into the user profile → both detected within minutes. All three were driven by " +
+      "the SYSTEM Cortex agent, so the path decides. Detection CAN be automated through the EDR agent — the change need " +
+      "only land in a user profile, on an item verified absent first (a re-install of an already-inventoried item is a no-op) (§7d.1, §7d.2)."],
+    ["3", "Events and inventory are separate surfaces with different latency", ORANGE,
+      "The event stream updates within minutes of a scan (~4–10 min end to end). The inventory API index LAGS: an item " +
+      "present in events at 06:06 was still absent from GET /inventory at 06:21 — total_count 0, and the item endpoint " +
+      "404s. Treat an empty inventory lookup as INCONCLUSIVE, never as proof the item is absent; react-to-event-then-enrich " +
+      "flows must run these lookups continue-on-error and must not assert absence from an empty result (§7d.3)."],
+  ];
+  const ch = 1.58, gap = 0.12, y0 = 1.86;
+  cards.forEach(([n, t, c, body], i) => {
+    const y = y0 + i * (ch + gap);
+    card(s, M, y, W, ch, i % 2 ? CARD_HI : CARD);
+    chip(s, M + 0.28, y + 0.26, n, c, 0.34);
+    s.addText(t, { x: M + 0.82, y: y + 0.20, w: W - 1.2, h: 0.28, fontSize: 13, bold: true, color: c, fontFace: F, margin: 0, valign: "top" });
+    s.addText(body, { x: M + 0.82, y: y + 0.54, w: W - 1.15, h: ch - 0.6, fontSize: 10.5, color: BODY, fontFace: F, margin: 0, lineSpacing: 13, valign: "top" });
+  });
+  s.addNotes(
+    "This slide is the precondition the previous revision lacked: a tester on a quiet host would see an empty " +
+    "koi_koi_raw and wrongly report failure. Card 1 (VERIFIED_FACTS §7b/§8): run-on-demand, change-driven. Card 2 " +
+    "(§7b(6), §7d.1, §7d.2): a controlled three-way install test proved detection follows the user-profile PATH, not " +
+    "the installing process — so an EDR-driven install into a user profile IS detectable and testing need not be " +
+    "interactive; this corrects an earlier, wrong conclusion in the evidence file. Card 3 (§7d.3): the event index " +
+    "and the inventory index have different latency, so an empty inventory lookup for a just-seen item is the index " +
+    "lagging, not the item being absent. All figures 21 July 2026."
+  );
+}
+
 /* ============================ 15. TEST 9 — event collection ============================ */
 testSlide(
   "Test 9",
   "Event collection lands in koi_koi_raw",
   [
+    "Precondition: a scan ran and something changed on the host (preceding slide).",
     "Confirm Fetch events is enabled and save — XSIAM / platform only.",
-    "Wait for at least two fetch cycles (default interval: 1 minute).",
-    "Run the count query in XQL:",
-    ["dataset = koi_koi_raw", "code"],
-    ["| comp count() as events by source_log_type", "code"],
-    "Note the numbers, wait one more cycle, and run it again.",
-    "Confirm the vendor and product tags:",
-    ["dataset = koi_koi_raw", "code"],
-    ["| comp count() as n by _vendor, _product", "code"],
+    "Wait for two fetch cycles (default 1 min), then count each stream:",
+    ["dataset = koi_koi_raw | filter source_log_type=\"Audit\" | comp count() as audit", "code"],
+    ["dataset = koi_koi_raw | filter source_log_type=\"Alerts\"", "code"],
+    ["| comp count_distinct(json_extract_scalar(metadata,", "code"],
+    ["      \"$.notification_event_id\")) as alerts", "code"],
+    "Re-run after one more cycle; then confirm the tags:",
+    ["dataset = koi_koi_raw | comp count() as n by _vendor, _product", "code"],
   ],
   [
     "The dataset koi_koi_raw exists and returns rows.",
     "One row per source_log_type — Alerts and Audit.",
-    "Counts increase between the two runs when KOI has new activity.",
+    "Distinct alert count (not row count) reflects real activity — Alert ROWS re-inflate every fetch (~245×/24h, §7e); Audit is not duplicated.",
     "_vendor = koi and _product = koi.",
   ],
   "The dataset name is not declared anywhere in the pack — it follows the {vendor}_{product}_raw convention and " +
-  "was confirmed on a live tenant (VERIFIED_FACTS §3). This test applies on XSIAM / platform only: the YAML sets " +
-  "isfetchevents true then overrides it with isfetchevents:xsoar false, so on XSOAR there is no collector to test. " +
-  "\"Dataset not found\" means no event has EVER arrived: check Fetch events, the marketplace the pack was " +
-  "installed for, and the instance's egress. Flat counts on an idle tenant are correct, not a fault."
+  "was confirmed on a live tenant (VERIFIED_FACTS §3). koi_koi_raw only moves after a scan runs and something " +
+  "changes (§7b/§8). XSIAM / platform only: the YAML sets isfetchevents true then overrides it with " +
+  "isfetchevents:xsoar false, so on XSOAR there is no collector. \"Dataset not found\" means no event has EVER " +
+  "arrived. Never count Alert ROWS between cycles — they grow on every fetch regardless of new activity; " +
+  "count_distinct on metadata.notification_event_id instead (§7e)."
 ).addNotes(
   "Reference measurement (VERIFIED_FACTS §3, tenant api-ayman.xdr.eu.paloaltonetworks.com, 30-day window " +
   "20 June - 20 July 2026): 20,156 events across 80 distinct hostnames, split 19,842 Audit / 314 Alerts. " +
-  "Your numbers will differ; the shape is what you are checking."
+  "Your numbers will differ; the shape is what you are checking. The Alerts count is deliberately distinct, not " +
+  "count(): the integration re-sends every open alert each fetch, so over 24h Alert rows ran 734 against 3 distinct " +
+  "alerts (VERIFIED_FACTS §7e). Audit carries a unique id per record and is not inflated."
 );
 
 /* ============================ 16. TEST 10 — schema split and XDM ============================ */
@@ -994,6 +1083,86 @@ testSlide(
   "user 3,017. Any playbook or query keyed on alert_type — as the custom pack's triage is — matches nothing here."
 );
 
+/* ============================ 16b. Alerts are duplicated — dedupe every count ============================ */
+/* VERIFIED_FACTS §7e — the single most consequential finding for this pack. Given its own slide because
+   it re-keys every Alerts count in the guide (tests 9 and 10, the empty-vs-failure matrix). Live, 21 July 2026. */
+{
+  const s = newSlide();
+  heading(s, "Most consequential finding", "Alerts are duplicated on every fetch — dedupe every count");
+  s.addText(
+    "The integration re-sends every still-open alert on each 1-minute fetch, so koi_koi_raw holds one row per alert " +
+    "PER FETCH, not one per alert. Audit is unaffected — each record carries a unique KOI id. Measured 21 July 2026 (§7e).",
+    { x: M, y: 1.36, w: W, h: 0.42, fontSize: 11.5, color: BODY, fontFace: F, margin: 0, lineSpacing: 15, valign: "top" }
+  );
+
+  /* Left — the inflation table */
+  const lw = 6.0;
+  card(s, M, 1.92, lw, 2.95, CARD);
+  s.addText("Rows vs distinct alerts", { x: M + 0.3, y: 2.08, w: lw - 0.6, h: 0.26, fontSize: 12, bold: true, color: RED, fontFace: F, margin: 0, valign: "top" });
+  const TC = { s: 0.30, w: 1.75, r: 2.75, d: 3.75, x: 4.85 };
+  const th = 2.46;
+  [["Stream", TC.s, 1.4], ["Window", TC.w, 0.95], ["Rows", TC.r, 0.95], ["Distinct", TC.d, 1.05], ["Inflation", TC.x, 1.0]].forEach(([t, x, w]) =>
+    s.addText(t, { x: M + x, y: th, w, h: 0.24, fontSize: 9.5, bold: true, color: ORANGE, fontFace: F, charSpacing: 1, margin: 0, valign: "top" })
+  );
+  const trows = [
+    ["Alerts", "last 24 h", "734", "3", "~245×", RED],
+    ["Alerts", "last 90 d", "1,048", "317", "3.3×", AMBER],
+    ["Audit", "last 24 h", "257", "257", "1.0", GREEN],
+    ["Audit", "last 90 d", "20,148", "20,148", "1.0", GREEN],
+  ];
+  const trh = 0.40;
+  trows.forEach(([st, win, rw, dc, inf, col], i) => {
+    const y = 2.76 + i * (trh + 0.03);
+    card(s, M + 0.24, y, lw - 0.48, trh, i % 2 ? CARD_HI : CARD);
+    s.addText(st, { x: M + TC.s, y: y + 0.09, w: 1.4, h: 0.24, fontSize: 10, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "top" });
+    s.addText(win, { x: M + TC.w, y: y + 0.09, w: 0.95, h: 0.24, fontSize: 9.5, color: BODY, fontFace: F, margin: 0, valign: "top" });
+    s.addText(rw, { x: M + TC.r, y: y + 0.09, w: 0.95, h: 0.24, fontSize: 10, color: BODY, fontFace: MONO, margin: 0, valign: "top" });
+    s.addText(dc, { x: M + TC.d, y: y + 0.09, w: 1.05, h: 0.24, fontSize: 10, color: BODY, fontFace: MONO, margin: 0, valign: "top" });
+    s.addText(inf, { x: M + TC.x, y: y + 0.09, w: 1.0, h: 0.24, fontSize: 10, bold: true, color: col, fontFace: F, margin: 0, valign: "top" });
+  });
+
+  /* Right — the dedupe key ranking */
+  const rx = M + lw + 0.4, rw = W - lw - 0.4;
+  card(s, rx, 1.92, rw, 2.95, CARD_HI);
+  s.addText("The only correct dedupe key  (90 d, 1,048 rows)", { x: rx + 0.3, y: 2.08, w: rw - 0.6, h: 0.26, fontSize: 12, bold: true, color: GREEN, fontFace: F, margin: 0, valign: "top" });
+  const keys = [
+    ["metadata.notification_event_id", "317", "the alert occurrence  ✅", GREEN],
+    ["_id", "1,048", "the row — every duplicate", MUTED],
+    ["observables[event.id]  (koi_event_id)", "20", "the scan batch — too coarse", MUTED],
+    ["finding_info.uid  (finding_uid)", "3", "the finding/policy definition", RED],
+  ];
+  keys.forEach(([f, d, meaning, col], i) => {
+    const y = 2.48 + i * 0.58;
+    s.addText(f, { x: rx + 0.3, y, w: rw - 1.3, h: 0.24, fontSize: 9.5, bold: true, color: col === MUTED ? BODY : col, fontFace: MONO, margin: 0, valign: "top" });
+    s.addText(d + " distinct", { x: rx + rw - 1.75, y, w: 1.55, h: 0.24, fontSize: 9, color: BODY, fontFace: MONO, margin: 0, align: "right", valign: "top" });
+    s.addText(meaning, { x: rx + 0.3, y: y + 0.22, w: rw - 0.6, h: 0.24, fontSize: 9.5, color: col, fontFace: F, margin: 0, valign: "top" });
+  });
+
+  /* Bottom — the mechanism and the fix */
+  card(s, M, 5.05, W, 1.68, CARD_HI);
+  chip(s, M + 0.28, 5.32, "!", RED, 0.34);
+  s.addText("Every count() over Alerts is wrong — count_distinct on the notification id", {
+    x: M + 0.82, y: 5.18, w: W - 1.2, h: 0.26, fontSize: 11.5, bold: true, color: RED, fontFace: F, margin: 0, valign: "top",
+  });
+  s.addText("dataset = koi_koi_raw | filter source_log_type=\"Alerts\"\n| comp count_distinct(json_extract_scalar(metadata,\"$.notification_event_id\")) as alerts", {
+    x: M + 0.82, y: 5.50, w: W - 1.2, h: 0.44, fontSize: 10.5, color: CYAN, fontFace: MONO, margin: 0, lineSpacing: 13, valign: "top",
+  });
+  s.addText(
+    "Within one notification: 357 rows, 1 distinct _time, 1 message, 357 distinct _insert_time — identical content " +
+    "re-inserted every cycle. notification_event_id is a verified 1:1 identity for (item.id, device.id, " +
+    "finding_info.uid, finding_info.created_time). Historical rows carry no promoted column, so dedupe inline. " +
+    "Figures drift as the dataset grows — read them as ratios, never as target counts (§7e).",
+    { x: M + 0.82, y: 6.00, w: W - 1.2, h: 0.66, fontSize: 10, color: BODY, fontFace: F, margin: 0, lineSpacing: 12.5, valign: "top" }
+  );
+  s.addNotes(
+    "VERIFIED_FACTS §7e/§7e.1/§7e.2. The mechanism: with eventFetchInterval = 1 the integration re-fetches open " +
+    "alerts every minute and pushes them again, and the pack ships no parsing rule to dedupe on the way in. " +
+    "finding_uid (3 distinct) is the finding DEFINITION shared by every alert from one policy — it is what the ported " +
+    "modeling rule wrongly used for xdm.alert.original_alert_id (§7e.3); notification_event_id is the correct source. " +
+    "Do not quote 734 or 317 as expected values — they are ratios on a growing dataset."
+  );
+}
+
 /* ============================ 17. Empty vs failure summary ============================ */
 {
   const s = newSlide();
@@ -1019,7 +1188,7 @@ testSlide(
     ["6", "koi-get-events returns no events", "quiet tenant or narrow window", "auth or rate-limit error"],
     ["7", "view=mcp_servers returns no items", "no MCP servers in your estate", "HTTP 400 — the value was rejected"],
     ["8", "add / remove writes no context", "always — all four declare zero outputs (test 8 runs the blocklist pair)", "the follow-up -get does not reflect the change"],
-    ["9", "Counts do not grow between cycles", "no new KOI activity in the window", "\"dataset not found\" — nothing has ever arrived"],
+    ["9", "Alert ROW count grows every cycle", "always — Alerts re-send each fetch; count_distinct(notification_event_id) instead (§7e)", "\"dataset not found\", or distinct alert/Audit counts flat after a real scanned change"],
     ["10", "xdm.* is entirely empty", "always — no modeling rules ship with this pack", "raw fields empty too, on rows that exist"],
   ];
   const rh = 0.42;
@@ -1065,7 +1234,7 @@ testSlide(
     ["view=software", "406", "1,044 then 1,046", "7"],
     ["Alerts available via API", "296", "48,526", "6"],
     ["Audit records available via API", "8,789", "96,196", "6"],
-    ["filter risk_level = high (search)", "145", "75", "5"],
+    ["filter risk_level = high (search)", "145", "not verified", "5"],
   ];
   const rh = 0.36;
   rows.forEach(([k, a, b, t], i) => {
@@ -1090,10 +1259,11 @@ testSlide(
     "Be honest about this in front of a customer. What is verified: the endpoints, the parameters they accept or " +
     "reject, and the response shapes, for the 8 read commands. What is not: the 5 state-changing commands, which " +
     "were never run, and the integration's mapping of any response into context, which is a YAML assertion. " +
-    "The risk_level=high row is the query-builder filter on this deck's test 5 slide, sent to /inventory/search on " +
-    "both instances (evidence/followup-probes.json). Two KOI_PLTS rows carry two readings hours apart on the same " +
-    "day; KOI_PAET did not move on either — it returned 3,447 in both sweeps. So drift here is per tenant and " +
-    "between runs, real inventory growth rather than API instability (VERIFIED_FACTS §7). The allowlist row cites " +
+    "The risk_level=high row is the query-builder filter on this deck's test 5 slide. VERIFIED_FACTS §5.3 verifies " +
+    "total_count 145 on KOI_PAET ONLY; the KOI_PLTS value is not in the evidence base, so it is left as " +
+    "\"not verified\" rather than asserted. The inventory-item and view=software rows: two KOI_PLTS readings hours " +
+    "apart on the same day; KOI_PAET did not move on either — it returned 3,447 in both sweeps. So drift here is per " +
+    "tenant and between runs, real inventory growth rather than API instability (VERIFIED_FACTS §7). The allowlist row cites " +
     "test 3 only: test 8 works the blocklist pair, so nothing in this guide exercises the allowlist writes. " +
     "Present the whole table as scale."
   );
@@ -1225,7 +1395,7 @@ testSlide(
     ["6", `koi-get-events writes ${prefixOf("koi-get-events")}.* with should_push_events=false`],
     ["7", "view=mcp_servers returns 200 when typed by hand; view=browser_extensions 400s"],
     ["8", "Blocklist add appears and remove reverses it to the before state; a policy's enabled value flips and is put back"],
-    ["9", "koi_koi_raw returns rows split by source_log_type, _vendor=koi, _product=koi"],
+    ["9", "koi_koi_raw returns rows split by source_log_type, _vendor=koi; Alert counts deduped on notification_event_id (§7e)"],
     ["10", "Audit and Alert schemas confirmed distinct; every xdm.* field empty, as expected"],
   ];
   const cw = (W - 0.4) / 2;
