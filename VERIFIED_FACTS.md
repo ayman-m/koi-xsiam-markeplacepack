@@ -438,6 +438,24 @@ on. Re-check whether this is a transient KOI-side change before removing the map
 
 ---
 
+## 7g. The KOI findings catalogue **[LIVE]**
+
+`GET /api/external/v2/findings` returns the **complete finding catalogue — 167 entries**, with a
+**byte-identical id set on both tenants** (verified by set comparison). This is the authoritative
+vocabulary of every finding KOI can raise, independent of which items happen to carry them, and it
+is what the hunting queries pivot on. Each entry has `id`, `name`, `risk` and `description`.
+
+97 of the 167 carry `risk >= 4`. The highest-risk `finding_id`s (real values, for hunts): risk 10 —
+`AssociatedwithMaliciousCampaign`, `MaliciousActivityDetected` (`d0a50fdc-…`),
+`ExfilsCloudandRemoteAccessSecrets`, `RansomwareBehaviorDetected`, `SpywareActivity`; risk 9 —
+`ExfilsAIChatConversations`, `HighRiskManifestConfusion`, `PromptInjectionDetected`,
+`Typosquatting`; MCP-relevant — `DataExportCapability`, `UnauthenticatedMcpServer`,
+`ToolsInvokableWithoutAuthentication`, `ToolShadowing`, `ToolDescriptionMismatch`.
+
+Live-verified example: filtering `/inventory/search` on `finding_id=MaliciousActivityDetected`
+returns **6 items** at critical risk on `KOI_PLTS` — `ModHeader`, `postmark-mcp`, `lodahs`,
+`Chrome Audio Capture`. Known-bad, present, and (per hunt H2.6) not necessarily blocklisted.
+
 ## 7c. ⚠️ The event and API `marketplace` vocabularies are different **[LIVE]**
 
 **This breaks any content that reads `marketplace` from an event and passes it to a command.**
