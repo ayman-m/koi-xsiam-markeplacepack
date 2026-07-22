@@ -37,7 +37,8 @@ The content items carry two different `fromversion` values, and that is correct,
 | Content | `fromversion` | Why |
 |---|---|---|
 | Parsing rule, modeling rule, dashboard | `8.4.0`, `supportedModules: [xsiam]` | XSIAM-only content types |
-| The 10 playbooks | `6.10.0` | Genuinely the correct playbook-format floor; the three `Unified *` playbooks in particular are portable XSOAR content that uses no XSIAM-only feature |
+| The 12 playbooks | `6.10.0` | Genuinely the correct playbook-format floor; the three `Unified *` playbooks in particular are portable XSOAR content that uses no XSIAM-only feature |
+| Incident type, 19 incident fields, layout | `6.10.0` | The presentation layer for KOI supply-chain / agentic alerts (**KOI Supply Chain Alert** type → `KOI Ext - Alert Triage` playbook + its layout). Fields map to the parsing rule's promoted columns and the triage/investigation playbook outputs; see ReleaseNotes 1.2.0 for how they populate |
 
 The pack as a whole cannot function below **8.4.0**, because the rules and the dashboard cannot be
 installed below it, and because the KOI integration's event collector is XSIAM/platform-only (the

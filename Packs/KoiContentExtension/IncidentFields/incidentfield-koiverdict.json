@@ -1,0 +1,43 @@
+{
+    "id": "incident_koiverdict",
+    "version": -1,
+    "modified": "2026-07-22T00:00:00Z",
+    "name": "KOI Triage Verdict",
+    "prettyName": "KOI Triage Verdict",
+    "ownerOnly": false,
+    "description": "The Alert Triage verdict.",
+    "cliName": "koiverdict",
+    "type": "singleSelect",
+    "closeForm": false,
+    "editForm": true,
+    "required": false,
+    "script": "",
+    "fieldCalcScript": "",
+    "neverSetAsRequired": false,
+    "isReadOnly": false,
+    "selectValues": [
+        "Benign",
+        "Suspicious",
+        "Malicious"
+    ],
+    "validationRegex": "",
+    "useAsKpi": false,
+    "locked": false,
+    "system": false,
+    "content": true,
+    "group": 0,
+    "hidden": false,
+    "associatedTypes": [
+        "KOI Supply Chain Alert"
+    ],
+    "systemAssociatedTypes": null,
+    "associatedToAll": false,
+    "unmapped": false,
+    "unsearchable": false,
+    "caseInsensitive": true,
+    "columns": [],
+    "defaultRows": [],
+    "sla": 0,
+    "threshold": 72,
+    "fromVersion": "6.10.0"
+}

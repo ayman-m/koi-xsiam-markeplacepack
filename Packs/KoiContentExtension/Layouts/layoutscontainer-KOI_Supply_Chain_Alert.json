@@ -1,0 +1,337 @@
+{
+    "id": "KOI Supply Chain Alert",
+    "name": "KOI Supply Chain Alert",
+    "group": "incident",
+    "version": -1,
+    "system": false,
+    "fromVersion": "6.10.0",
+    "description": "Layout for KOI supply-chain / agentic alerts: item, risk, verdict, affected host, governance and the investigation summary.",
+    "detailsV2": {
+        "tabs": [
+            {
+                "id": "koi-alert-tab",
+                "name": "KOI Alert",
+                "sections": [
+                    {
+                        "displayType": "ROW",
+                        "h": 3,
+                        "i": "koi-sec-item",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Item",
+                        "static": false,
+                        "w": 1,
+                        "x": 0,
+                        "y": 0,
+                        "items": [
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiitemname",
+                                "height": 22,
+                                "id": "koi-item-koiitemname",
+                                "index": 0,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiitemtype",
+                                "height": 22,
+                                "id": "koi-item-koiitemtype",
+                                "index": 1,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koimarketplace",
+                                "height": 22,
+                                "id": "koi-item-koimarketplace",
+                                "index": 2,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiitemversion",
+                                "height": 22,
+                                "id": "koi-item-koiitemversion",
+                                "index": 3,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            }
+                        ]
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 3,
+                        "i": "koi-sec-risk",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Risk & Verdict",
+                        "static": false,
+                        "w": 1,
+                        "x": 1,
+                        "y": 0,
+                        "items": [
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiverdict",
+                                "height": 22,
+                                "id": "koi-item-koiverdict",
+                                "index": 0,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koirisklevel",
+                                "height": 22,
+                                "id": "koi-item-koirisklevel",
+                                "index": 1,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiorgrisklevel",
+                                "height": 22,
+                                "id": "koi-item-koiorgrisklevel",
+                                "index": 2,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koifindingtitle",
+                                "height": 22,
+                                "id": "koi-item-koifindingtitle",
+                                "index": 3,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            }
+                        ]
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 3,
+                        "i": "koi-sec-host",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Affected Host",
+                        "static": false,
+                        "w": 1,
+                        "x": 2,
+                        "y": 0,
+                        "items": [
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koihostname",
+                                "height": 22,
+                                "id": "koi-item-koihostname",
+                                "index": 0,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koideviceuser",
+                                "height": 22,
+                                "id": "koi-item-koideviceuser",
+                                "index": 1,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koideviceid",
+                                "height": 22,
+                                "id": "koi-item-koideviceid",
+                                "index": 2,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiendpointcount",
+                                "height": 22,
+                                "id": "koi-item-koiendpointcount",
+                                "index": 3,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            }
+                        ]
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 3,
+                        "i": "koi-sec-gov",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Governance & Identity",
+                        "static": false,
+                        "w": 1,
+                        "x": 0,
+                        "y": 3,
+                        "items": [
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koigovernance",
+                                "height": 22,
+                                "id": "koi-item-koigovernance",
+                                "index": 0,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koinotificationid",
+                                "height": 22,
+                                "id": "koi-item-koinotificationid",
+                                "index": 1,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koifindinguid",
+                                "height": 22,
+                                "id": "koi-item-koifindinguid",
+                                "index": 2,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            },
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koialerttype",
+                                "height": 22,
+                                "id": "koi-item-koialerttype",
+                                "index": 3,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            }
+                        ]
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 4,
+                        "i": "koi-sec-summary",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Investigation Summary",
+                        "static": false,
+                        "w": 2,
+                        "x": 1,
+                        "y": 3,
+                        "items": [
+                            {
+                                "endCol": 2,
+                                "fieldId": "incident_koiinvestigationsummary",
+                                "height": 22,
+                                "id": "koi-item-koiinvestigationsummary",
+                                "index": 0,
+                                "sectionItemType": "field",
+                                "startCol": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": "caseinfoid-koi-info",
+                "name": "Incident Info",
+                "sections": [
+                    {
+                        "displayType": "ROW",
+                        "h": 2,
+                        "i": "koi-sec-casedetails",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Case Details",
+                        "static": false,
+                        "w": 1,
+                        "x": 0,
+                        "y": 0,
+                        "items": []
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 3,
+                        "i": "koi-sec-timeline",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Timeline Information",
+                        "static": false,
+                        "w": 1,
+                        "x": 1,
+                        "y": 0,
+                        "type": "items",
+                        "items": []
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 4,
+                        "i": "koi-sec-notes",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Notes",
+                        "static": false,
+                        "w": 1,
+                        "x": 2,
+                        "y": 0,
+                        "type": "notes"
+                    }
+                ]
+            },
+            {
+                "id": "koi-investigation-tab",
+                "name": "Investigation",
+                "sections": [
+                    {
+                        "displayType": "ROW",
+                        "h": 4,
+                        "i": "koi-sec-indicators",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Indicators",
+                        "static": false,
+                        "query": null,
+                        "queryType": "input",
+                        "w": 2,
+                        "x": 0,
+                        "y": 0,
+                        "type": "indicators"
+                    },
+                    {
+                        "displayType": "ROW",
+                        "h": 4,
+                        "i": "koi-sec-invtimeline",
+                        "isVisible": true,
+                        "maxW": 3,
+                        "moved": false,
+                        "name": "Investigation Timeline",
+                        "static": false,
+                        "w": 1,
+                        "x": 2,
+                        "y": 0,
+                        "type": "invTimeline"
+                    }
+                ]
+            },
+            {
+                "id": "warRoom",
+                "name": "War Room",
+                "sections": []
+            }
+        ]
+    }
+}
