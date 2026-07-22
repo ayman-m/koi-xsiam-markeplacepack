@@ -2,219 +2,10 @@ id: KOI Ext - Alert Triage
 version: -1
 fromversion: 6.10.0
 name: KOI Ext - Alert Triage
-description: |-
-  End-to-end triage for a KOI alert, for the Marketplace KOI pack (Koi, v1.2.3 — 13 commands,
-  integration only). Attach this as the playbook on KOI alerts ingested into Cortex XSIAM.
-
-  Flow: KOI Ext - Extract Alert Context parses the alert payload into KoiContext ->
-  DUPLICATE DELIVERIES OF THE SAME KOI ALERT ARE SUPPRESSED ->
-  the item is looked up in the organization's inventory -> KOI Ext - Investigate Item ->
-  the org blocklist is read -> KOI Ext - Investigate Device when the alert carries a device ->
-  a verdict is computed -> a triage summary is posted -> Benign is auto-closed, Malicious
-  raises severity and opens an ANALYST-GATED KOI Ext - Block and Remediate with auto_block
-  forced false, Suspicious is left open for review.
-
-  ============================================================================
-  DUPLICATE ALERTS — READ THIS BEFORE DEPLOYING. YOU MUST CONFIGURE ONE OF THE TWO.
-  ============================================================================
-  The Marketplace KOI integration re-sends every still-open alert on every fetch cycle
-  (eventFetchInterval defaults to 1 minute). koi_koi_raw therefore carries one row per alert
-  PER FETCH. Live, 90 days to 2026-07-21, tenant api-ayman.xdr.eu. koi_koi_raw grows
-  continuously, so the cohort census below and the dedupe measurement under it were taken
-  minutes apart and their row totals differ; each figure is quoted against the total it was
-  actually measured over, never against one notional total:
-
-    item_type     rows   distinct notification ids   inflation   last seen
-    extension      296            296                  1.0x      2026-07-09
-    mcp_server     842             21                 40.1x      current
-    ALL          1,138            317                  3.6x
-
-  A separate query the same day over the same 90-day window returned 1,048 rows for the same
-  317 distinct notification ids (~3.3x). Over the last 24 hours the ratio reaches ~245:1
-  (734 rows -> 3 distinct notifications, measured 21 July 2026). One mcp_server notification
-  was delivered 408 times in 6.8 hours. The duplication is confined to the mcp_server cohort — extension
-  alerts arrive exactly once — but mcp_server is effectively 100% of current ingestion.
-
-  UNCONTROLLED, THIS PLAYBOOK RUNS ONCE PER DELIVERY: one real KOI alert becomes up to 245
-  full investigations, 245 device sweeps, 245 war-room summaries and, for a Malicious verdict,
-  245 analyst approval gates. It also risks the correlation rule itself: Cortex XSIAM
-  automatically DISABLES a correlation rule that reaches 5,000 hits in 24 hours, and at one
-  delivery per minute per open alert that ceiling is roughly four concurrently-open KOI alerts.
-
-  The only correct dedupe key is metadata.notification_event_id — 317 distinct values across
-  1,048 rows (21 July 2026) and a verified 1:1 identity for
-  (item.id, device.id, finding_info.uid, finding_info.created_time). It is 100% populated.
-  Do NOT use finding_uid (3 distinct — it is the POLICY id), koi_event_id (20 distinct — the
-  SCAN BATCH id) or the row _id (unique per duplicate). KOI Ext - Extract Alert Context now
-  publishes it as KoiContext.notification_id.
-
-  --- OPTION A (preferred): suppress at the correlation rule, so the alerts are never made.
-  This pack's integration is EVENT-COLLECTION ONLY (isfetchevents, no fetch-incidents), so
-  every KOI alert in your tenant is created by a correlation rule you wrote over koi_koi_raw.
-  That is the only layer that can stop duplicate alerts from existing. In the correlation
-  rule:
-    1. Surface the key in the rule's XQL, e.g.
-         | alter koi_notification_id = json_extract_scalar(metadata, "$.notification_event_id")
-       (or use the koi_notification_id column this pack's parsing rule promotes).
-    2. Turn on Issue Suppression: "Enable issues suppression", Fields = koi_notification_id,
-       Duration time = 1 Day (the documented maximum, and comfortably longer than the 6.8-hour
-       longest re-send run observed).
-    3. Map koi_notification_id into an alert field in the rule's Issue Field Mapping — that
-       field is also what Option B needs.
-  Note the documented limit: suppression Duration caps at 1 day. An alert KOI keeps open for
-  longer than a day can therefore still re-alert once per day. Option B catches those.
-
-  --- OPTION B (this playbook, defence in depth): tasks 24-32.
-  Set the dedupe_alert_field input to the machine name of the alert field carrying the
-  notification id. The playbook then searches for an earlier alert with the same id and, if
-  it finds one, closes this alert as a duplicate WITHOUT investigating. Its limits, stated
-  plainly:
-    - It needs that alert field to exist and be searchable. It cannot be done from context
-      alone: a playbook cannot read another alert's context, so the key must be a field.
-    - It is best-effort and not atomic. Two deliveries processed in the same instant could
-      both pass the check. At one delivery per minute this is a narrow window, not a design
-      guarantee.
-    - It reacts AFTER the alert exists. The 245 alerts are still created and still counted
-      against the correlation rule's 5,000/24h auto-disable ceiling; only the investigation
-      is skipped. Option A is what prevents the alerts.
-    - It FAILS OPEN. If the notification id is missing, the field name is not configured, or
-      ${alert.id} does not resolve, the gate is skipped and the alert is triaged normally.
-      Nothing here can close a first delivery.
-
-  ============================================================================
-  ALERT_TYPE IS NOT USABLE AS A DISCRIMINATOR ON THIS DATA
-  ============================================================================
-  The custom pack's version of this playbook branched on KoiContext.alert_type values
-  "Removed from Marketplace" / "Publisher Compromised" / "Unvetted MCP Server" / "New Item".
-  Live validation of koi_koi_raw (1,048 Alerts rows = 317 alert occurrences, 90 days to
-  21 July 2026, tenant
-  api-ayman.xdr.eu): alert_type has EXACTLY ONE distinct value — "policy_violation". Every
-  one of those branches was dead. They have been removed rather than shipped as dead code,
-  and the verdict has been re-keyed onto signals that actually vary. alert_type is still
-  shown in the triage summary for the record; it is never tested.
-
-  ============================================================================
-  VERDICT MATRIX
-  ============================================================================
-  Four signals, all captured as scalars before any device-wide inventory call can overwrite
-  them. Labels are evaluated top to bottom; the first that matches wins.
-
-    A  KoiContext.risk_level      the alert's own risk level. Live distribution per ALERT
-                                  OCCURRENCE over 90 days:
-                                  low 204 | medium 52 | pending 50 | high 8 | critical 3.
-                                  All five vocabulary values occur — no literal below is dead.
-                                  (severity is 1:1 with this: Low/Medium/Informational/High/Critical.)
-    B  KoiContext.item_type       extension 296 | mcp_server 21. Both literals occur.
-    C  KoiTriage.org_risk_level   Koi.Inventory.risk_level for this item from the organization's
-                                  own inventory — the substitute for the custom pack's
-                                  koi-koidex-risk-report. EMPTY IS INCONCLUSIVE, NOT "CLEAN" AND
-                                  NOT "ABSENT FROM THE ORG": the inventory index lags the event
-                                  stream (VERIFIED_FACTS 7d.3 — items visible in events at
-                                  06:06 were still returning total_count 0 from the inventory
-                                  API at 06:21), so the freshly-alerted item an alert is most
-                                  likely to be about routinely has no inventory record YET.
-    D  KoiTriage.blocklisted_item non-empty when item_id already appears in koi-blocklist-get.
-
-    MALICIOUS   if ANY of:  A in {critical, high}
-                            C in {critical, high}
-                            D non-empty
-      Rationale. A is the alert's own assessment and only 11 of 317 alert occurrences reach
-      high/critical, so escalating all of them is affordable. C catches the case where the
-      alert itself is unremarkable but the same item is rated high/critical against the org's
-      installed base. D is a governance breach: the item is already forbidden org-wide and is
-      still generating alerts, which is worth an analyst either way.
-
-    SUSPICIOUS  if ANY of:  B = mcp_server
-                            A in {medium, pending}
-                            C = medium
-      Rationale. mcp_server is never auto-closed: MCP servers are the least-vetted surface in
-      the estate (live data: their risk_level is "pending" on 19 of 21 occurrences and
-      "critical" on 2 — the distribution contains no assessed-low value at all), and they are
-      the one item type whose alerts carry NO marketplace, which means automated response
-      cannot address them anyway. "pending" is an unfinished assessment, not a clean bill of
-      health, so it must not close. medium on either the alert or the org record stays open.
-      NOTE the changed economics: mcp_server was 21 of 317 occurrences over 90 days but is
-      effectively 100% of current ingestion (no extension alert since 2026-07-09), so this is
-      no longer a bounded-cost branch — it is the main one. Duplicate suppression, not a
-      narrower rule, is what keeps the review cost down.
-
-    BENIGN      only if ALL of:  A = low  AND  B = extension
-      Rationale. Reached only after MALICIOUS and SUSPICIOUS have both failed, so by evaluation
-      order it also implies C is not high/critical/medium and the item is not blocklisted. This
-      is the single auto-close path and it is the narrowest of the three. Be aware of what an
-      empty C contributes here: because the inventory index lags, a genuinely new item can
-      auto-close on A and B alone. That is deliberate — A=low is KOI's own assessment of the
-      item that triggered the alert — but the close note must not be read as "the org has
-      never seen this item".
-
-    DEFAULT -> SUSPICIOUS. Anything unclassified — empty risk_level, an item_type or risk level
-      the vendor adds later, a failed lookup — stays open for a human. Suspicious remains the
-      safe default, exactly as in the original.
-
-  ============================================================================
-  SUBSTITUTIONS vs the custom pack (KOI v1.3.0, 26 commands)
-  ============================================================================
-    - koi-koidex-risk-report(item_id, marketplace)
-        -> koi-inventory-list(item_id, marketplace, limit=1)
-      Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level (captured as
-      KoiTriage.org_risk_level). koi-inventory-item-get is NOT usable as the substitute: it
-      requires item_id AND marketplace AND version, all three, and version is not known here.
-      Capability delta: this is the ORGANIZATION's risk record, not the vendor catalog's. It
-      returns nothing both when nobody in the org has the item AND when the inventory index has
-      simply not caught up with the event stream yet — and the two are indistinguishable from
-      here. C is therefore empty for exactly the newly-appeared item an alert is most likely to
-      be about, and the verdict then rests on A, B and D. Report an empty C as INCONCLUSIVE /
-      NOT YET INDEXED, never as "the organization does not have this item".
-      Koi.KoidexRiskReport.ai_risk_summary and the Koidex compliance block have no equivalent
-      among the 13 commands and are gone from the summary.
-    - Sub-playbooks repointed to KOI Ext - Extract Alert Context, KOI Ext - Investigate Item,
-      KOI Ext - Investigate Device and KOI Ext - Block and Remediate.
-
-  ============================================================================
-  ORDERING AND CONTEXT HAZARDS (do not reorder tasks casually)
-  ============================================================================
-    1. koi-inventory-list APPENDS to Koi.Inventory, and KOI Ext - Investigate Device lists up
-       to 500 items for a whole host into the same path. The org risk level and marketplace are
-       therefore captured into KoiTriage.* scalars BEFORE the device investigation runs. Move
-       the device task earlier and the verdict will start reading a device-wide array.
-    2. LastArrayElement, not FirstArrayElement, is used when reading Koi.Inventory — because the
-       path is appended to, the last element is this playbook's own lookup.
-    3. The blocklist read is inside the item branch, so KoiTriage.blocklisted_item is only ever
-       evaluated when an item_id exists.
-    4. marketplace: the vocabulary a KOI event uses is NOT the vocabulary the KOI API accepts
-       (VERIFIED_FACTS 7c) - events say software_windows / chrome / vsc where the API wants
-       windows / chrome_web_store / vscode, and only npm and pypi are spelled the same in
-       both. This playbook never touches a raw event value: KOI Ext - Extract Alert Context
-       does the mapping and publishes the API-safe KoiContext.marketplace (plus
-       KoiContext.marketplace_raw for the record). KoiTriage.marketplace is seeded from the
-       MAPPED value, then overwritten by Koi.Inventory.marketplace when the inventory lookup
-       returned one - that is a COMMAND output, already API-canonical, and is used as-is
-       rather than re-mapped. Both are therefore safe to pass to the sub-playbooks. AN EMPTY
-       MARKETPLACE IS NOW THE COMMON CASE, NOT THE EXCEPTION: no mcp_server alert carries one
-       (0 of 21), no extension alert has arrived since 2026-07-09, and the inventory fallback
-       that used to recover it also comes back empty while the index lags. Expect the item
-       branch to run with marketplace unknown on most current alerts. Nothing here requires it
-       — the item gate keys on item_id alone (task 2), koi-inventory-list takes marketplace as
-       an optional FILTER, and KOI Ext - Block and Remediate re-resolves it by item_id and
-       SKIPS the blocklist write rather than making a malformed call if it still cannot.
-
-  ============================================================================
-  OPTIONAL XDR ENRICHMENT (Theme D / D5) — best-effort, degrades gracefully
-  ============================================================================
-  A parallel right-hand lane (tasks 33-39) enriches the triage with what Cortex XDR endpoint
-  telemetry saw. It runs ONE XQL query (Theme D / D5) via xdr-xql-generic-query to rebuild the
-  hour either side of this alert on its host: KOI supply-chain audit events, host process
-  executions (with the KOI agent scan split into its own lane), and egress from code-pulling
-  processes. It is keyed on ${KoiContext.alert_hostname} and centred on the alert time
-  (finding_info.created_time, epoch ms). This introduces a dependency on the Cortex XDR - XQL
-  Query Engine integration, which is NOT the KOI integration and is NOT part of this pack; it is
-  declared OPTIONAL (mandatory:false) in pack_metadata.json (pack CortexXDR; on Cortex platform
-  the same command ships in Core). The lane hangs off the first-delivery convergence (tasks
-  31/32), so it runs only for non-duplicate alerts; it is entirely continue-on-error and runs in
-  PARALLEL with the verdict, the analyst gate and the auto-close, never blocking or altering any
-  of them. Missing hostname/time, or the engine absent/slow/rate-limited, and the lane is skipped
-  or errors while triage completes normally. The D5 query reads koi_koi_raw source_log_type =
-  "Audit" (NOT Alerts) and xdr_data, so the Alerts dedupe rule does not apply.
+description: "End-to-end triage for a KOI alert, for the Marketplace KOI pack (Koi, v1.2.3 — 13 commands,\nintegration only). Attach this as the playbook on KOI alerts ingested into Cortex XSIAM.\n\nFlow: KOI Ext - Extract Alert Context parses the alert payload into KoiContext ->\nDUPLICATE DELIVERIES OF THE SAME KOI ALERT ARE SUPPRESSED ->\nthe item is looked up in the organization's inventory -> KOI Ext - Investigate Item ->\nthe org blocklist is read -> KOI Ext - Investigate Device when the alert carries a device ->\na verdict is computed -> a triage summary is posted -> Benign is auto-closed, Malicious\nraises severity and opens an ANALYST-GATED KOI Ext - Block and Remediate with auto_block\nforced false, Suspicious is left open for review.\n\n============================================================================\nDUPLICATE ALERTS — READ THIS BEFORE DEPLOYING. YOU MUST CONFIGURE ONE OF THE TWO.\n============================================================================\nThe Marketplace KOI integration re-sends every still-open alert on every fetch cycle\n(eventFetchInterval defaults to 1 minute). koi_koi_raw therefore carries one row per alert\nPER FETCH. Live, 90 days to 2026-07-21, tenant api-ayman.xdr.eu. koi_koi_raw grows\ncontinuously, so the cohort census below and the dedupe measurement under it were taken\nminutes apart and their row totals differ; each figure is quoted against the total it was\nactually measured over, never against one notional total:\n\n  item_type     rows   distinct notification ids   inflation   last seen\n  extension      296            296                  1.0x      2026-07-09\n  mcp_server     842             21                 40.1x      current\n  ALL          1,138            317                  3.6x\n\nA separate query the same day over the same 90-day window returned 1,048 rows for the same\n317 distinct notification ids (~3.3x). Over the last 24 hours the ratio reaches ~245:1\n(734 rows -> 3 distinct notifications, measured 21 July 2026). One mcp_server notification\nwas delivered 408 times in 6.8 hours. The duplication is confined to the mcp_server cohort — extension\nalerts arrive exactly once — but mcp_server is effectively 100% of current ingestion.\n\nUNCONTROLLED, THIS PLAYBOOK RUNS ONCE PER DELIVERY: one real KOI alert becomes up to 245\nfull investigations, 245 device sweeps, 245 war-room summaries and, for a Malicious verdict,\n245 analyst approval gates. It also risks the correlation rule itself: Cortex XSIAM\nautomatically DISABLES a correlation rule that reaches 5,000 hits in 24 hours, and at one\ndelivery per minute per open alert that ceiling is roughly four concurrently-open KOI alerts.\n\nThe only correct dedupe key is metadata.notification_event_id — 317 distinct values across\n1,048 rows (21 July 2026) and a verified 1:1 identity for\n(item.id, device.id, finding_info.uid, finding_info.created_time). It is 100% populated.\nDo NOT use finding_uid (3 distinct — it is the POLICY id), koi_event_id (20 distinct — the\nSCAN BATCH id) or the row _id (unique per duplicate). KOI Ext - Extract Alert Context now\npublishes it as KoiContext.notification_id.\n\n--- OPTION A (preferred): suppress at the correlation rule, so the alerts are never made.\nThis pack's integration is EVENT-COLLECTION ONLY (isfetchevents, no fetch-incidents), so\nevery KOI alert in your tenant is created by a correlation rule you wrote over koi_koi_raw.\nThat is the only layer that can stop duplicate alerts from existing. In the correlation\nrule:\n  1. Surface the key in the rule's XQL, e.g.\n       | alter koi_notification_id = json_extract_scalar(metadata, \"$.notification_event_id\")\n     (or use the koi_notification_id column this pack's parsing rule promotes).\n  2. Turn on Issue Suppression: \"Enable issues suppression\", Fields = koi_notification_id,\n     Duration time = 1 Day (the documented maximum, and comfortably longer than the 6.8-hour\n     longest re-send run observed).\n  3. Map koi_notification_id into an alert field in the rule's Issue Field Mapping — that\n     field is\
+  \ also what Option B needs.\nNote the documented limit: suppression Duration caps at 1 day. An alert KOI keeps open for\nlonger than a day can therefore still re-alert once per day. Option B catches those.\n\n--- OPTION B (this playbook, defence in depth): tasks 24-32.\nSet the dedupe_alert_field input to the machine name of the alert field carrying the\nnotification id. The playbook then searches for an earlier alert with the same id and, if\nit finds one, closes this alert as a duplicate WITHOUT investigating. Its limits, stated\nplainly:\n  - It needs that alert field to exist and be searchable. It cannot be done from context\n    alone: a playbook cannot read another alert's context, so the key must be a field.\n  - It is best-effort and not atomic. Two deliveries processed in the same instant could\n    both pass the check. At one delivery per minute this is a narrow window, not a design\n    guarantee.\n  - It reacts AFTER the alert exists. The 245 alerts are still created and still counted\n    against the correlation rule's 5,000/24h auto-disable ceiling; only the investigation\n    is skipped. Option A is what prevents the alerts.\n  - It FAILS OPEN. If the notification id is missing, the field name is not configured, or\n    ${alert.id} does not resolve, the gate is skipped and the alert is triaged normally.\n    Nothing here can close a first delivery.\n\n============================================================================\nALERT_TYPE IS NOT USABLE AS A DISCRIMINATOR ON THIS DATA\n============================================================================\nThe custom pack's version of this playbook branched on KoiContext.alert_type values\n\"Removed from Marketplace\" / \"Publisher Compromised\" / \"Unvetted MCP Server\" / \"New Item\".\nLive validation of koi_koi_raw (1,048 Alerts rows = 317 alert occurrences, 90 days to\n21 July 2026, tenant\napi-ayman.xdr.eu): alert_type has EXACTLY ONE distinct value — \"policy_violation\". Every\none of those branches was dead. They have been removed rather than shipped as dead code,\nand the verdict has been re-keyed onto signals that actually vary. alert_type is still\nshown in the triage summary for the record; it is never tested.\n\n============================================================================\nVERDICT MATRIX\n============================================================================\nFour signals, all captured as scalars before any device-wide inventory call can overwrite\nthem. Labels are evaluated top to bottom; the first that matches wins.\n\n  A  KoiContext.risk_level      the alert's own risk level. Live distribution per ALERT\n                                OCCURRENCE over 90 days:\n                                low 204 | medium 52 | pending 50 | high 8 | critical 3.\n                                All five vocabulary values occur — no literal below is dead.\n                                (severity is 1:1 with this: Low/Medium/Informational/High/Critical.)\n  B  KoiContext.item_type       extension 296 | mcp_server 21. Both literals occur.\n  C  KoiTriage.org_risk_level   Koi.Inventory.risk_level for this item from the organization's\n                                own inventory — the substitute for the custom pack's\n                                koi-koidex-risk-report. EMPTY IS INCONCLUSIVE, NOT \"CLEAN\" AND\n                                NOT \"ABSENT FROM THE ORG\": the inventory index lags the event\n                                stream (VERIFIED_FACTS 7d.3 — items visible in events at\n                                06:06 were still returning total_count 0 from the inventory\n                                API at 06:21), so the freshly-alerted item an alert is most\n                                likely to be about routinely has no inventory record YET.\n  D  KoiTriage.blocklisted_item non-empty when item_id already appears in koi-blocklist-get.\n\n  MALICIOUS   if ANY of:  A in {critical, high}\n                          C in {critical, high}\n                          D non-empty\n    Rationale. A is the alert's\
+  \ own assessment and only 11 of 317 alert occurrences reach\n    high/critical, so escalating all of them is affordable. C catches the case where the\n    alert itself is unremarkable but the same item is rated high/critical against the org's\n    installed base. D is a governance breach: the item is already forbidden org-wide and is\n    still generating alerts, which is worth an analyst either way.\n\n  SUSPICIOUS  if ANY of:  B = mcp_server\n                          A in {medium, pending}\n                          C = medium\n    Rationale. mcp_server is never auto-closed: MCP servers are the least-vetted surface in\n    the estate (live data: their risk_level is \"pending\" on 19 of 21 occurrences and\n    \"critical\" on 2 — the distribution contains no assessed-low value at all), and they are\n    the one item type whose alerts carry NO marketplace, which means automated response\n    cannot address them anyway. \"pending\" is an unfinished assessment, not a clean bill of\n    health, so it must not close. medium on either the alert or the org record stays open.\n    NOTE the changed economics: mcp_server was 21 of 317 occurrences over 90 days but is\n    effectively 100% of current ingestion (no extension alert since 2026-07-09), so this is\n    no longer a bounded-cost branch — it is the main one. Duplicate suppression, not a\n    narrower rule, is what keeps the review cost down.\n\n  BENIGN      only if ALL of:  A = low  AND  B = extension\n    Rationale. Reached only after MALICIOUS and SUSPICIOUS have both failed, so by evaluation\n    order it also implies C is not high/critical/medium and the item is not blocklisted. This\n    is the single auto-close path and it is the narrowest of the three. Be aware of what an\n    empty C contributes here: because the inventory index lags, a genuinely new item can\n    auto-close on A and B alone. That is deliberate — A=low is KOI's own assessment of the\n    item that triggered the alert — but the close note must not be read as \"the org has\n    never seen this item\".\n\n  DEFAULT -> SUSPICIOUS. Anything unclassified — empty risk_level, an item_type or risk level\n    the vendor adds later, a failed lookup — stays open for a human. Suspicious remains the\n    safe default, exactly as in the original.\n\n============================================================================\nSUBSTITUTIONS vs the custom pack (KOI v1.3.0, 26 commands)\n============================================================================\n  - koi-koidex-risk-report(item_id, marketplace)\n      -> koi-inventory-list(item_id, marketplace, limit=1)\n    Koi.KoidexRiskReport.risk_level -> Koi.Inventory.risk_level (captured as\n    KoiTriage.org_risk_level). koi-inventory-item-get is NOT usable as the substitute: it\n    requires item_id AND marketplace AND version, all three, and version is not known here.\n    Capability delta: this is the ORGANIZATION's risk record, not the vendor catalog's. It\n    returns nothing both when nobody in the org has the item AND when the inventory index has\n    simply not caught up with the event stream yet — and the two are indistinguishable from\n    here. C is therefore empty for exactly the newly-appeared item an alert is most likely to\n    be about, and the verdict then rests on A, B and D. Report an empty C as INCONCLUSIVE /\n    NOT YET INDEXED, never as \"the organization does not have this item\".\n    Koi.KoidexRiskReport.ai_risk_summary and the Koidex compliance block have no equivalent\n    among the 13 commands and are gone from the summary.\n  - Sub-playbooks repointed to KOI Ext - Extract Alert Context, KOI Ext - Investigate Item,\n    KOI Ext - Investigate Device and KOI Ext - Block and Remediate.\n\n============================================================================\nORDERING AND CONTEXT HAZARDS (do not reorder tasks casually)\n============================================================================\n  1. koi-inventory-list APPENDS to Koi.Inventory, and KOI Ext - Investigate Device lists up\n     to 500 items for a whole host into\
+  \ the same path. The org risk level and marketplace are\n     therefore captured into KoiTriage.* scalars BEFORE the device investigation runs. Move\n     the device task earlier and the verdict will start reading a device-wide array.\n  2. LastArrayElement, not FirstArrayElement, is used when reading Koi.Inventory — because the\n     path is appended to, the last element is this playbook's own lookup.\n  3. The blocklist read is inside the item branch, so KoiTriage.blocklisted_item is only ever\n     evaluated when an item_id exists.\n  4. marketplace: the vocabulary a KOI event uses is NOT the vocabulary the KOI API accepts\n     (VERIFIED_FACTS 7c) - events say software_windows / chrome / vsc where the API wants\n     windows / chrome_web_store / vscode, and only npm and pypi are spelled the same in\n     both. This playbook never touches a raw event value: KOI Ext - Extract Alert Context\n     does the mapping and publishes the API-safe KoiContext.marketplace (plus\n     KoiContext.marketplace_raw for the record). KoiTriage.marketplace is seeded from the\n     MAPPED value, then overwritten by Koi.Inventory.marketplace when the inventory lookup\n     returned one - that is a COMMAND output, already API-canonical, and is used as-is\n     rather than re-mapped. Both are therefore safe to pass to the sub-playbooks. AN EMPTY\n     MARKETPLACE IS NOW THE COMMON CASE, NOT THE EXCEPTION: no mcp_server alert carries one\n     (0 of 21), no extension alert has arrived since 2026-07-09, and the inventory fallback\n     that used to recover it also comes back empty while the index lags. Expect the item\n     branch to run with marketplace unknown on most current alerts. Nothing here requires it\n     — the item gate keys on item_id alone (task 2), koi-inventory-list takes marketplace as\n     an optional FILTER, and KOI Ext - Block and Remediate re-resolves it by item_id and\n     SKIPS the blocklist write rather than making a malformed call if it still cannot.\n\n============================================================================\nOPTIONAL XDR ENRICHMENT (Theme D / D5) — best-effort, degrades gracefully\n============================================================================\nA parallel right-hand lane (tasks 33-39) enriches the triage with what Cortex XDR endpoint\ntelemetry saw. It runs ONE XQL query (Theme D / D5) via xdr-xql-generic-query to rebuild the\nhour either side of this alert on its host: KOI supply-chain audit events, host process\nexecutions (with the KOI agent scan split into its own lane), and egress from code-pulling\nprocesses. It is keyed on ${KoiContext.alert_hostname} and centred on the alert time\n(finding_info.created_time, epoch ms). This introduces a dependency on the Cortex XDR - XQL\nQuery Engine integration, which is NOT the KOI integration and is NOT part of this pack; it is\ndeclared OPTIONAL (mandatory:false) in pack_metadata.json (pack CortexXDR; on Cortex platform\nthe same command ships in Core). The lane hangs off the first-delivery convergence (tasks\n31/32), so it runs only for non-duplicate alerts; it is entirely continue-on-error and runs in\nPARALLEL with the verdict, the analyst gate and the auto-close, never blocking or altering any\nof them. Missing hostname/time, or the engine absent/slow/rate-limited, and the lane is skipped\nor errors while triage completes normally. The D5 query reads koi_koi_raw source_log_type =\n\"Audit\" (NOT Alerts) and xdr_data, so the Alerts dedupe rule does not apply."
 starttaskid: '0'
 tasks:
   '0':
@@ -360,7 +151,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000026
       version: -1
       name: Build the duplicate search query
-      description: 'Assembles the alert-search query "<field>:\"<notification id>\"". The field name is an input rather than a literal because the machine name of the alert field that carries the KOI notification id is decided by YOUR correlation rule''s field mapping, not by this pack. Nothing else in the query - no type filter, no status filter - because a duplicate that was already auto-closed by a previous run of this playbook must still count as a duplicate.'
+      description: Assembles the alert-search query "<field>:\"<notification id>\"". The field name is an input rather than a literal because the machine name of the alert field that carries the KOI notification id is decided by YOUR correlation rule's field mapping, not by this pack. Nothing else in the query - no type filter, no status filter - because a duplicate that was already auto-closed by a previous run of this playbook must still count as a duplicate.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -520,7 +311,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000030
       version: -1
       name: Close as duplicate delivery
-      description: 'commands.local.cmd.close.inv - closes this re-delivery and points the analyst at the alert that is actually being investigated. closeReason "Duplicate" is the XSOAR built-in value; if your tenant uses a custom close-reason vocabulary, change it to the tenant''s equivalent - a close reason the tenant does not know will make this task fail and the duplicate will stay open.'
+      description: commands.local.cmd.close.inv - closes this re-delivery and points the analyst at the alert that is actually being investigated. closeReason "Duplicate" is the XSOAR built-in value; if your tenant uses a custom close-reason vocabulary, change it to the tenant's equivalent - a close reason the tenant does not know will make this task fail and the duplicate will stay open.
       iscommand: true
       brand: Builtin
       script: Builtin|||closeInvestigation
@@ -529,7 +320,7 @@ tasks:
       closeReason:
         simple: Duplicate
       closeNotes:
-        simple: 'KOI duplicate delivery. The Marketplace KOI integration re-sends every still-open alert on each fetch cycle (once a minute), so this is the same KOI alert occurrence as an alert already open. KOI notification_event_id ${KoiContext.notification_id} — already handled by alert(s) ${KoiTriage.duplicate_of}. Item ${KoiContext.item_id} on ${KoiContext.alert_hostname}. Closed without investigation.'
+        simple: KOI duplicate delivery. The Marketplace KOI integration re-sends every still-open alert on each fetch cycle (once a minute), so this is the same KOI alert occurrence as an alert already open. KOI notification_event_id ${KoiContext.notification_id} — already handled by alert(s) ${KoiTriage.duplicate_of}. Item ${KoiContext.item_id} on ${KoiContext.alert_hostname}. Closed without investigation.
     nexttasks:
       '#none#':
       - '23'
@@ -620,7 +411,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000002
       version: -1
       name: Is an item identifiable?
-      description: 'Gated on item_id alone, not on item_id + marketplace as in the custom pack. koi-inventory-list filters on item_id by itself, and mcp_server alerts NEVER carry a marketplace (0 of 21 occurrences). Since no extension alert has arrived since 2026-07-09, requiring a marketplace here would today drop essentially EVERY alert out of the item path. item_id itself is present on 317 of 317 occurrences.'
+      description: Gated on item_id alone, not on item_id + marketplace as in the custom pack. koi-inventory-list filters on item_id by itself, and mcp_server alerts NEVER carry a marketplace (0 of 21 occurrences). Since no extension alert has arrived since 2026-07-09, requiring a marketplace here would today drop essentially EVERY alert out of the item path. item_id itself is present on 317 of 317 occurrences.
       iscommand: false
       brand: ''
       type: condition
@@ -711,7 +502,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000004
       version: -1
       name: Capture org risk level
-      description: 'Signal C of the verdict matrix, captured as a scalar now because the device investigation later appends up to 500 rows to Koi.Inventory. LastArrayElement reads this playbook''s own lookup. Empty here means the lookup was INCONCLUSIVE - no org record, or the inventory index has not indexed the item yet - and the verdict falls back to A, B and D. It never means the item is safe or absent.'
+      description: Signal C of the verdict matrix, captured as a scalar now because the device investigation later appends up to 500 rows to Koi.Inventory. LastArrayElement reads this playbook's own lookup. Empty here means the lookup was INCONCLUSIVE - no org record, or the inventory index has not indexed the item yet - and the verdict falls back to A, B and D. It never means the item is safe or absent.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -785,7 +576,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000006
       version: -1
       name: Seed marketplace from the alert
-      description: 'Baseline value, overwritten in the next task when the inventory lookup returned an authoritative one. Reads KoiContext.marketplace, which KOI Ext - Extract Alert Context has ALREADY mapped from the event vocabulary onto the API vocabulary - never KoiContext.marketplace_raw, which would 400. Empty here is normal and recoverable.'
+      description: Baseline value, overwritten in the next task when the inventory lookup returned an authoritative one. Reads KoiContext.marketplace, which KOI Ext - Extract Alert Context has ALREADY mapped from the event vocabulary onto the API vocabulary - never KoiContext.marketplace_raw, which would 400. Empty here is normal and recoverable.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1313,7 +1104,7 @@ tasks:
         simple: ${KoiTriage.summary}
     nexttasks:
       '#none#':
-      - '18'
+      - '40'
     separatecontext: false
     continueonerror: true
     continueonerrortype: ''
@@ -1495,7 +1286,7 @@ tasks:
       version:
         simple: ${KoiContext.item_version}
       reason:
-        simple: 'KOI triage verdict Malicious — alert risk ${KoiContext.risk_level}, org inventory risk ${KoiTriage.org_risk_level}, item ${KoiContext.item_id} (${KoiContext.item_type})'
+        simple: KOI triage verdict Malicious — alert risk ${KoiContext.risk_level}, org inventory risk ${KoiTriage.org_risk_level}, item ${KoiContext.item_id} (${KoiContext.item_type})
       auto_block:
         simple: 'false'
       instance_name:
@@ -1542,7 +1333,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000033
       version: -1
       name: Capture the alert time for the XDR window
-      description: 'OPTIONAL XDR ENRICHMENT (best-effort, continue-on-error). Reads finding_info.created_time (epoch milliseconds) parsed into KoiRaw.finding_info by KOI Ext - Extract Alert Context, which ran with separatecontext:false so KoiRaw is in this playbook''s context. This is the alert''s own creation time and becomes the centre of the +/-60 minute window in the D5 query below. Empty when created_time is absent — the next condition then skips the enrichment. This lane runs only for non-duplicate deliveries (it hangs off the first-delivery convergence, tasks 31/32) and never touches the verdict, the analyst gate, or the auto-close.'
+      description: OPTIONAL XDR ENRICHMENT (best-effort, continue-on-error). Reads finding_info.created_time (epoch milliseconds) parsed into KoiRaw.finding_info by KOI Ext - Extract Alert Context, which ran with separatecontext:false so KoiRaw is in this playbook's context. This is the alert's own creation time and becomes the centre of the +/-60 minute window in the D5 query below. Empty when created_time is absent — the next condition then skips the enrichment. This lane runs only for non-duplicate deliveries (it hangs off the first-delivery convergence, tasks 31/32) and never touches the verdict, the analyst gate, or the auto-close.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1584,7 +1375,7 @@ tasks:
       id: koiextri-0000-4000-8000-000000000034
       version: -1
       name: Can the XDR alert-context query run?
-      description: 'Runs the D5 enrichment only when BOTH the alert hostname and the alert epoch are known — the query keys on agent_hostname and centres its window on the epoch. Either missing -> the lane is skipped with a note and triage is unaffected. This is the graceful-degradation gate for the optional Cortex XDR - XQL Query Engine dependency.'
+      description: Runs the D5 enrichment only when BOTH the alert hostname and the alert epoch are known — the query keys on agent_hostname and centres its window on the epoch. Either missing -> the lane is skipped with a note and triage is unaffected. This is the graceful-degradation gate for the optional Cortex XDR - XQL Query Engine dependency.
       iscommand: false
       brand: ''
       type: condition
@@ -1667,36 +1458,7 @@ tasks:
       type: regular
     scriptarguments:
       query:
-        simple: |-
-          dataset = koi_koi_raw
-          | filter source_log_type = "Audit"
-          | filter hostname = "${KoiContext.alert_hostname}"
-          | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
-          | filter abs(mins_from_alert) <= 60
-          | alter lane   = "KOI_SUPPLY_CHAIN"
-          | alter detail = coalesce(message, concat(coalesce(action, "?"), " ", coalesce(object_name, "?")))
-          | fields _time, mins_from_alert, lane, detail
-          | union
-          (dataset = xdr_data
-           | filter event_type = ENUM.PROCESS
-           | filter agent_hostname = "${KoiContext.alert_hostname}"
-           | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
-           | filter abs(mins_from_alert) <= 60
-           | alter lane   = if(actor_process_image_path contains "Koi", "KOI_AGENT_SCAN", "XDR_EXECUTION")
-           | alter detail = coalesce(action_process_image_command_line, action_process_image_name)
-           | fields _time, mins_from_alert, lane, detail)
-          | union
-          (dataset = xdr_data
-           | filter event_type = ENUM.NETWORK
-           | filter agent_hostname = "${KoiContext.alert_hostname}"
-           | filter actor_process_image_name in ("git.exe", "pip.exe", "pip3.exe", "npm.exe", "npx.exe", "node.exe", "curl.exe", "wget.exe", "python.exe", "winget.exe", "msiexec.exe")
-           | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
-           | filter abs(mins_from_alert) <= 60
-           | alter lane   = "XDR_EGRESS"
-           | alter detail = concat(coalesce(actor_process_image_name, "?"), " -> ", coalesce(action_remote_ip, "?"), ":", to_string(action_remote_port), " (", coalesce(action_country, "?"), ")")
-           | fields _time, mins_from_alert, lane, detail)
-          | sort asc _time
-          | limit 500
+        simple: "dataset = koi_koi_raw\n| filter source_log_type = \"Audit\"\n| filter hostname = \"${KoiContext.alert_hostname}\"\n| alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, \"MILLIS\"), \"MINUTE\")\n| filter abs(mins_from_alert) <= 60\n| alter lane   = \"KOI_SUPPLY_CHAIN\"\n| alter detail = coalesce(message, concat(coalesce(action, \"?\"), \" \", coalesce(object_name, \"?\")))\n| fields _time, mins_from_alert, lane, detail\n| union\n(dataset = xdr_data\n | filter event_type = ENUM.PROCESS\n | filter agent_hostname = \"${KoiContext.alert_hostname}\"\n | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, \"MILLIS\"), \"MINUTE\")\n | filter abs(mins_from_alert) <= 60\n | alter lane   = if(actor_process_image_path contains \"Koi\", \"KOI_AGENT_SCAN\", \"XDR_EXECUTION\")\n | alter detail = coalesce(action_process_image_command_line, action_process_image_name)\n | fields _time, mins_from_alert, lane, detail)\n| union\n(dataset = xdr_data\n | filter event_type = ENUM.NETWORK\n | filter agent_hostname = \"${KoiContext.alert_hostname}\"\n | filter actor_process_image_name in (\"git.exe\", \"pip.exe\", \"pip3.exe\", \"npm.exe\", \"npx.exe\", \"node.exe\", \"curl.exe\", \"wget.exe\", \"python.exe\", \"winget.exe\", \"msiexec.exe\")\n | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, \"MILLIS\"), \"MINUTE\")\n | filter abs(mins_from_alert) <= 60\n | alter lane   = \"XDR_EGRESS\"\n | alter detail = concat(coalesce(actor_process_image_name, \"?\"), \" -> \", coalesce(action_remote_ip, \"?\"), \":\", to_string(action_remote_port), \" (\", coalesce(action_country, \"?\"), \")\")\n | fields _time, mins_from_alert, lane, detail)\n| sort asc _time\n| limit 500"
       time_frame:
         simple: ${inputs.xql_time_frame}
       query_name:
@@ -1732,9 +1494,9 @@ tasks:
       type: regular
     scriptarguments:
       value:
-        simple: |-
-          ### XDR alert context — ${KoiContext.alert_hostname} (optional XQL enrichment)
-          Cortex XDR endpoint telemetry for the hour either side of this alert (Theme D / D5): KOI supply-chain audit events, host process executions (the KOI agent scan is split into its own lane so it is not mistaken for adversary activity), and egress from code-pulling processes. Rows returned: **${PaloAltoNetworksXQL.GenericQuery.number_of_results}**. Each row carries mins_from_alert, a signed offset in minutes from the alert. A blank means either nothing else happened on the host in that window, OR the optional Cortex XDR - XQL Query Engine is not installed — this enrichment is best-effort and never blocks the verdict, the analyst gate, or the auto-close.
+        simple: '### XDR alert context — ${KoiContext.alert_hostname} (optional XQL enrichment)
+
+          Cortex XDR endpoint telemetry for the hour either side of this alert (Theme D / D5): KOI supply-chain audit events, host process executions (the KOI agent scan is split into its own lane so it is not mistaken for adversary activity), and egress from code-pulling processes. Rows returned: **${PaloAltoNetworksXQL.GenericQuery.number_of_results}**. Each row carries mins_from_alert, a signed offset in minutes from the alert. A blank means either nothing else happened on the host in that window, OR the optional Cortex XDR - XQL Query Engine is not installed — this enrichment is best-effort and never blocks the verdict, the analyst gate, or the auto-close.'
     nexttasks:
       '#none#':
       - '38'
@@ -1816,6 +1578,219 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
+  '40':
+    id: '40'
+    taskid: koiextri-0000-4000-8000-000000000040
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000040
+      version: -1
+      name: Governance state
+      description: 'Classify the item''s governance: blocklisted / allowlisted / ungoverned.'
+      iscommand: false
+      brand: ''
+      type: condition
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2400}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    conditions:
+    - label: blocklisted
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.blocklisted_item
+          operator: isExists
+          right:
+            value:
+              simple: ''
+    - label: allowlisted
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiInvestigation.allowlisted_count
+          operator: greaterThan
+          right:
+            value:
+              simple: '0'
+    nexttasks:
+      '#default#':
+      - '43'
+      blocklisted:
+      - '41'
+      allowlisted:
+      - '42'
+  '41':
+    id: '41'
+    taskid: koiextri-0000-4000-8000-000000000041
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000041
+      version: -1
+      name: Governance = blocklisted
+      description: Set the governance label for the alert field.
+      brand: ''
+      type: regular
+      scriptName: SetAndHandleEmpty
+      iscommand: false
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2560}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiTriage.governance
+      value:
+        simple: blocklisted
+    nexttasks:
+      '#none#':
+      - '44'
+  '42':
+    id: '42'
+    taskid: koiextri-0000-4000-8000-000000000042
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000042
+      version: -1
+      name: Governance = allowlisted
+      description: Set the governance label for the alert field.
+      brand: ''
+      type: regular
+      scriptName: SetAndHandleEmpty
+      iscommand: false
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2720}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiTriage.governance
+      value:
+        simple: allowlisted
+    nexttasks:
+      '#none#':
+      - '44'
+  '43':
+    id: '43'
+    taskid: koiextri-0000-4000-8000-000000000043
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000043
+      version: -1
+      name: Governance = ungoverned
+      description: Set the governance label for the alert field.
+      brand: ''
+      type: regular
+      scriptName: SetAndHandleEmpty
+      iscommand: false
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 2880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      key:
+        simple: KoiTriage.governance
+      value:
+        simple: ungoverned
+    nexttasks:
+      '#none#':
+      - '44'
+  '44':
+    id: '44'
+    taskid: koiextri-0000-4000-8000-000000000044
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000044
+      version: -1
+      name: Set KOI alert fields
+      description: Populate the KOI Supply Chain Alert incident fields from the triage/investigation context.
+      iscommand: true
+      brand: ''
+      type: regular
+      script: '|||setAlert'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 450, "y": 3040}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+    scriptarguments:
+      koiitemid:
+        simple: ${KoiContext.item_id}
+      koiitemname:
+        simple: ${KoiContext.package_name}
+      koiitemtype:
+        simple: ${KoiContext.item_type}
+      koiitemversion:
+        simple: ${KoiContext.item_version}
+      koimarketplace:
+        simple: ${KoiTriage.marketplace}
+      koimarketplaceraw:
+        simple: ${KoiContext.marketplace_raw}
+      koirisklevel:
+        simple: ${KoiContext.risk_level}
+      koiorgrisklevel:
+        simple: ${KoiTriage.org_risk_level}
+      koialerttype:
+        simple: ${KoiContext.alert_type}
+      koifindingtitle:
+        simple: ${KoiContext.finding_title}
+      koifindinguid:
+        simple: ${KoiContext.finding_uid}
+      koinotificationid:
+        simple: ${KoiContext.notification_id}
+      koihostname:
+        simple: ${KoiContext.alert_hostname}
+      koideviceid:
+        simple: ${KoiContext.device_id}
+      koideviceuser:
+        simple: ${KoiContext.device_last_user}
+      koiendpointcount:
+        simple: ${KoiInvestigation.endpoint_count}
+      koigovernance:
+        simple: ${KoiTriage.governance}
+      koiverdict:
+        simple: ${KoiTriage.verdict}
+      koiinvestigationsummary:
+        simple: ${KoiTriage.summary}
+    nexttasks:
+      '#none#':
+      - '18'
 view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 2150, "x": 60, "y": 20}}}'
 inputs:
 - key: instance_name
@@ -1844,7 +1819,7 @@ inputs:
   value:
     simple: 24 hours
   required: false
-  description: 'Time frame for the OPTIONAL XDR alert-context XQL query (Theme D / D5), passed to xdr-xql-generic-query. Must span from now back past the alert time so the +/-60 minute window resolves; "24 hours" suits a freshly-delivered alert, widen it for older alerts. Only used when the alert carries a hostname and time and the Cortex XDR - XQL Query Engine integration is present; the enrichment is best-effort and skipped otherwise.'
+  description: Time frame for the OPTIONAL XDR alert-context XQL query (Theme D / D5), passed to xdr-xql-generic-query. Must span from now back past the alert time so the +/-60 minute window resolves; "24 hours" suits a freshly-delivered alert, widen it for older alerts. Only used when the alert carries a hostname and time and the Cortex XDR - XQL Query Engine integration is present; the enrichment is best-effort and skipped otherwise.
   playbookInputQuery: null
 outputs:
 - contextPath: KoiTriage.verdict
