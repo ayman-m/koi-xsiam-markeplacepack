@@ -44,7 +44,6 @@ dataset = xdr_data
             exec_sig = action_process_signature_status
     | fields exec_path, exec_host, exec_time, exec_user, exec_cmd, exec_parent, exec_sha256, exec_sig
   ) as run run.exec_path = dropped_path and run.exec_host = drop_host
-// acquisition then run only counts if the run came AFTER the write
 | alter minutes_drop_to_exec = timestamp_diff(exec_time, drop_time, "MINUTE")
 // acquisition then run only counts if the run came AFTER the write
 | filter minutes_drop_to_exec >= 0

@@ -1,7 +1,4 @@
-// Theme D / D1b - Item history rolled up per host, for a war-room summary block.
-// Same PARAMs as D1. `values()` emits a deduplicated array per group, so versions_seen
-// doubles as a version-drift indicator without a second query.
-// Investigation. Suggested timeframe 30d.
+// KOI Ext - Investigate Item, war-room summary block. Same PARAMs as D1.
 dataset = koi_koi_raw
 | filter source_log_type = "Audit" and type in ("extensions", "remediation")
 | filter object_id = "octocat/Hello-World" or object_name = "octocat/Hello-World"   // PARAM

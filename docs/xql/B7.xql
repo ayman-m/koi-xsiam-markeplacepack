@@ -7,8 +7,8 @@
 // Investigation.
 dataset = koi_koi_raw
 | filter source_log_type = "Alerts"
-| alter res = resources
-| filter json_extract_scalar(res, "$[0].type") = "mcp"
+| alter res = to_json_string(resources)
+| filter json_extract_scalar(res, "$.0.type") = "mcp"
 | alter evid = json_extract_scalar(metadata, "$.notification_event_id")
 | dedup evid
 | fields evid, message, risk_level, severity, res
