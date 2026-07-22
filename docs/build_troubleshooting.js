@@ -241,6 +241,100 @@ const NOT_IN_THIS_PACK = [
   "koi-fetch-context-get", "koi-fetch-context-set",
 ];
 
+/* ============================ 0b. Companion pack (SEPARATE, additional content) ============================ */
+/* [PACK] The optional companion pack shipped alongside this one. It is a DIFFERENT pack — no
+   integration and no commands of its own — so nothing about it comes from marketplace-pack.json.
+   Its name and version are read from its own pack_metadata.json and its contents are counted from
+   the directory, so the cover note's figures cannot drift from what the pack actually contains.
+   The build fails rather than print a guessed figure if the pack or its content is missing. */
+const EXT_DIR = path.join(__dirname, "..", "Packs", "KoiContentExtension");
+const countFiles = (dir, re) => {
+  try { return fs.readdirSync(dir).filter(f => re.test(f)).length; } catch { return 0; }
+};
+let COMPANION;
+try {
+  const meta = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "pack_metadata.json"), "utf8"));
+  COMPANION = {
+    name: meta.name,                    /* "KOI Content Extension" */
+    id: "KoiContentExtension",
+    version: meta.currentVersion,
+    support: meta.support,
+    playbooks: countFiles(path.join(EXT_DIR, "Playbooks"), /^playbook-.*\.yml$/),
+    dashboards: countFiles(path.join(EXT_DIR, "XSIAMDashboards"), /\.json$/),
+    hasParsing: countFiles(path.join(EXT_DIR, "ParsingRules", "KoiContentExtension"), /\.xif$/) > 0,
+    hasModeling: countFiles(path.join(EXT_DIR, "ModelingRules", "KoiContentExtension"), /\.xif$/) > 0,
+  };
+} catch (e) {
+  console.error("FATAL: cannot read companion pack Packs/KoiContentExtension — " + e.message);
+  process.exit(1);
+}
+if (!COMPANION.playbooks || !COMPANION.dashboards || !COMPANION.hasParsing || !COMPANION.hasModeling) {
+  console.error("FATAL: companion pack Packs/KoiContentExtension is missing expected content " +
+    "(playbooks/dashboard/parsing/modeling)");
+  process.exit(1);
+}
+const COMPANION_ADDS =
+  `parsing rules, modeling rules, ${COMPANION.playbooks} playbooks and ` +
+  (COMPANION.dashboards === 1 ? "a dashboard" : `${COMPANION.dashboards} dashboards`);
+
+/* [LIVE] VERIFIED_FACTS §7c — the event `marketplace` vocabulary is NOT the API/YAML vocabulary.
+   Left column: the short form as it appears in koi_koi_raw. Right: the long form the API and the
+   pack YAML `predefined` list use. api === null means the value is not a marketplace at all
+   (built_in and side_loaded are installation_method values leaking into the field; ollama is simply
+   absent from the API's list). Event/API item counts are a 21 Jul 2026 snapshot and drift — the
+   MAPPING (left → right) is what is load-bearing. */
+const MARKETPLACE_MAP = [
+  { event: "software_windows",          events: 5301, api: "windows",                   items: 214 },
+  { event: "pypi",                      events: 4674, api: "pypi",                      items: 1990 },
+  { event: "chrome",                    events: 891,  api: "chrome_web_store",          items: 63 },
+  { event: "built_in",                  events: 829,  api: null,                        items: null },
+  { event: "npm",                       events: 775,  api: "npm",                       items: 325 },
+  { event: "software_mac",              events: 617,  api: "mac",                       items: 192 },
+  { event: "homebrew",                  events: 231,  api: "homebrew",                  items: 322 },
+  { event: "vsc",                       events: 175,  api: "vscode",                    items: 64 },
+  { event: "chocolatey",                events: 91,   api: "chocolatey",                items: 28 },
+  { event: "cursor",                    events: 88,   api: "cursor",                    items: 11 },
+  { event: "github",                    events: 65,   api: "github_mcp_registry",       items: 0 },
+  { event: "edge",                      events: 48,   api: "edge_add_ons",              items: 11 },
+  { event: "firefox",                   events: 19,   api: "firefox_add_ons",           items: 22 },
+  { event: "docker",                    events: 15,   api: "docker",                    items: 5 },
+  { event: "npp",                       events: 12,   api: "notepad++",                 items: 5 },
+  { event: "openvsx",                   events: 10,   api: "open_vsx_registry",         items: 0 },
+  { event: "jet",                       events: 5,    api: "jetbrains",                 items: 1 },
+  { event: "ollama",                    events: 5,    api: null,                        items: null },
+  { event: "claude_desktop_extensions", events: 5,    api: "claude_desktop_extensions", items: 3 },
+  { event: "side_loaded",               events: 1,    api: null,                        items: null },
+];
+/* [YAML] Commands whose marketplace argument is validated against the pack's predefined long-form
+   list. Derived from the JSON so the symptom cannot name a command that lacks the argument. */
+const MKT_ARG = c => ((byName[c] && byName[c].arguments) || []).find(a => a.name === "marketplace");
+const MARKETPLACE_CMDS = CMDS.filter(c => MKT_ARG(c.name)).map(c => c.name);
+const MARKETPLACE_CMDS_REQUIRED = CMDS.filter(c => { const a = MKT_ARG(c.name); return a && a.required; })
+  .map(c => c.name);
+const MARKETPLACE_LONG = (() => {
+  const a = CMDS.map(c => MKT_ARG(c.name)).find(x => x && (x.predefined || []).length);
+  return a ? a.predefined : [];
+})();
+/* Guard: every long form the mapping targets must be a real YAML value. Fail the build rather than
+   print a mapping that has silently drifted from the pack. */
+const badMap = MARKETPLACE_MAP.filter(m => m.api && !MARKETPLACE_LONG.includes(m.api)).map(m => m.event);
+if (badMap.length) {
+  console.error("FATAL: marketplace mapping targets a value not in the pack YAML: " + badMap.join(", "));
+  process.exit(1);
+}
+/* Values that COINCIDE between the event field and the API name (pass through unmapped), values that
+   DIFFER (must be mapped), and values that are not a marketplace at all. Computed from the §7c table
+   data — the authoritative per-value evidence. NB: §7c's prose says "only npm and pypi" coincide, but
+   its own table shows several more (homebrew, chocolatey, cursor, docker, claude_desktop_extensions);
+   the table is trusted here. npm and pypi must be among the matches, or the mapping has drifted. */
+const MKT_MATCH = MARKETPLACE_MAP.filter(m => m.api === m.event).map(m => m.event);
+const MKT_MAP_NEEDED = MARKETPLACE_MAP.filter(m => m.api && m.api !== m.event).map(m => m.event);
+const MKT_NO_API = MARKETPLACE_MAP.filter(m => m.api === null).map(m => m.event);
+if (!MKT_MATCH.includes("npm") || !MKT_MATCH.includes("pypi")) {
+  console.error("FATAL: npm and pypi must map to themselves in the marketplace mapping");
+  process.exit(1);
+}
+
 /* ============================ 1. Visual language ============================ */
 /* Colour tokens, fonts, table style and heading hierarchy reused from the custom pack's
    docs/build_troubleshooting.js. Content is not reused. */
@@ -407,8 +501,17 @@ const cover = [
     ["Marketplaces", PACK.pack.marketplaces.join(", ")],
     ["Command surface", `${PACK.counts.commands} commands · ${PACK.counts.arguments} arguments · ${PACK.counts.outputs} output declarations`],
     ["Source pinned at", `md5 ${PACK.source.md5}, byte-identical to master on ${PACK.source.verified_against_master}`],
-    ["Live verification", "Tenant api-ayman.xdr.eu.paloaltonetworks.com, instances KOI_PAET and KOI_PLTS, 20 July 2026. API-side only: the API behind 8 of the 13 commands was exercised read-only; the endpoints behind the 5 state-changing commands were not called, and no koi-* command was executed through XSIAM (section 3)"],
+    ["Live verification", "Tenant api-ayman.xdr.eu.paloaltonetworks.com, instances KOI_PAET and KOI_PLTS, 20–21 July 2026. API-side only: the API behind 8 of the 13 commands was exercised read-only; the endpoints behind the 5 state-changing commands were not called, and no koi-* command was executed through XSIAM (section 3)"],
+    ["Companion pack", `${COMPANION.name} (${COMPANION.id}) v${COMPANION.version} — SEPARATE, additional content. Not part of this pack. See the note below.`],
   ], { noHeader: true, boldCol: [0], colColor: { 0: SLATE } }),
+  callout("OPTIONAL COMPANION PACK — SEPARATE, ADDITIONAL CONTENT",
+    `A second, separate content pack, ${COMPANION.id} ("${COMPANION.name}", v${COMPANION.version}, ` +
+    `${COMPANION.support}-supported), is published alongside this one. It ships NO integration and NO ` +
+    `commands of its own; it adds ${COMPANION_ADDS} on top of the KOI integration, normalising and ` +
+    `modelling the koi_koi_raw dataset this pack produces. It is NOT part of the Marketplace KOI pack, ` +
+    `and nothing in this troubleshooting guide depends on it. Where a fix below names a "KOI Ext" ` +
+    `playbook, that is this companion pack, flagged as such.`,
+    BLUE, INHERIT_BG),
   new Paragraph({ children: [new PageBreak()] }),
 ];
 
@@ -594,10 +697,12 @@ const dataPath = [
 const partA_open = [
   new Paragraph({ children: [new PageBreak()] }),
   h1("Part A — Marketplace Pack Troubleshooting"),
-  p("Ten failure modes. Each block gives the symptom as it presents, the cause, the evidence behind the diagnosis, and what to do. The Evidence row is the tagged part; the other three rows are advice composed from it."),
+  p("Fourteen failure modes. Each block gives the symptom as it presents, the cause, the evidence behind the diagnosis, and what to do. The Evidence row is the tagged part; the other three rows are advice composed from it."),
   p("They are not all of one kind, and the difference matters:", { spacing: { before: 120 } }),
   bullet([{ text: "Observed on this tenant on 20 July 2026 — ", bold: true },
           { text: "A2, A3, A4, A5, A8, A9. The condition described was seen, in the dataset or against the live API." }]),
+  bullet([{ text: "Observed on this tenant on 21 July 2026 — ", bold: true },
+          { text: "A11, A12, A13 and A14. The Alerts-stream duplication, the event-vs-API marketplace vocabulary mismatch, the run-on-demand scan behaviour and the user-profile scan scope were each measured live on 21 July 2026 (VERIFIED_FACTS §7b–§7e). A13 also re-verifies first-hand a finding first established in the earlier custom-pack investigation (Part B, B1)." }]),
   bullet([{ text: "Part observed, part read from the integration source — ", bold: true },
           { text: "A6 and A7. Of A6's three failure modes, two were reproduced as HTTP responses on both instances; the third is a refusal inside Koi.py, read from the source and never executed, because the integration raises before any API call is made. In A7, both instances' configuration and both KOI tenants' volumes were read live, but that the two instances land in the same koi_koi_raw dataset could not be observed: the pack ships no field identifying the producing instance, so no row can be attributed to one. That half follows from the configuration and from send_events_to_xsiam(vendor=\"koi\", product=\"koi\") in Koi.py. In both blocks the Evidence row says which half is which." }]),
   bullet([{ text: "Reasoned from verified evidence, not observed here — ", bold: true },
@@ -869,6 +974,147 @@ const A10 = symptom(10, "Context from one inventory command disappears after the
   ],
 });
 
+const A11 = symptom(11, "Alert counts look inflated — the same alert appears hundreds of times", {
+  symptomText: "A count() over Alerts is far larger than the number of real alerts. One alert shows up as hundreds of near-identical rows in koi_koi_raw, and every widget, query or triage step that counts alert rows — or fires once per row — is overstated.",
+  cause: "The integration re-sends every still-open alert on each fetch cycle, so koi_koi_raw holds one row per alert PER FETCH, not one row per alert. With eventFetchInterval = 1 minute, an alert that stays open for hours is re-inserted once a minute. Audit records are point-in-time and are not duplicated.",
+  evidence: "[LIVE] Measured 21 July 2026. Over the last 24 hours the Alerts stream held 734 rows for just 3 distinct " +
+            "alerts — a 244.7× inflation; over 90 days, 1,048 rows for 317 distinct alerts (3.3×). Audit is unaffected: " +
+            "257 rows / 257 distinct over 24 h and 20,148 / 20,148 over 90 d (1.0×). Within one notification, 357 rows " +
+            "carried 1 distinct _time and 1 distinct message but 357 distinct _insert_time — the same alert re-inserted " +
+            "357 times, once per fetch minute. Nothing dedupes on the way in, because the pack ships no parsing rule.",
+  fix: "Dedupe every alert count on the notification identity. The only correct key is metadata.notification_event_id. " +
+       "On already-ingested rows there is no promoted column, so extract it inline with " +
+       "json_extract_scalar(metadata, \"$.notification_event_id\"). Never count() alert rows directly.",
+  extra: [
+    p("Four candidate identifiers were measured over the same 90-day window. Only one identifies the alert occurrence:",
+      { keepNext: true }),
+    table([3900, 1500, TW - 5400], [
+      ["Field", "Distinct / 1,048 rows", "What it identifies"],
+      ["_id", "1,048", "the row — counts every duplicate"],
+      ["metadata.notification_event_id", "317", "the alert occurrence — the correct key"],
+      ["observables[event.id] (koi_event_id)", "20", "the scan batch — far too coarse"],
+      ["finding_info.uid (finding_uid)", "3", "the finding / policy definition — far too coarse"],
+    ], { mono: [0], monoSize: 16 }),
+    p("Corrected count — dedupe first, then count:", { spacing: { before: 160 }, keepNext: true }),
+    code("dataset = koi_koi_raw"),
+    code("| filter source_log_type = \"Alerts\""),
+    code("| alter koi_notification_id = json_extract_scalar(metadata, \"$.notification_event_id\")"),
+    code("| comp count_distinct(koi_notification_id) as alerts"),
+    rich([tag("LIVE"), { text: "On this data (21 July 2026), count() over Alerts returns 734 where " +
+            "count_distinct(koi_notification_id) returns 3. " },
+          tag("DERIVED"), { text: " The query text above is composed from those verified field names and was not " +
+            "executed as written; metadata is a plain object, not an array, so no coalesce is needed." }],
+         { spacing: { before: 140 } }),
+    callout("EVERY count() OVER ALERTS IS OVERSTATED",
+      "The integration re-sends every still-open alert on each 1-minute fetch, so a row count is multiplied by however " +
+      "many fetch cycles each alert survived. Any triage playbook that reacts per alert row fires repeatedly for one " +
+      "real alert. Dedupe on the notification id — count_distinct(koi_notification_id) — and on historical rows extract " +
+      "it inline: json_extract_scalar(metadata, \"$.notification_event_id\"). Audit is unaffected; this is Alerts-only.",
+      RED, "FEF2F2"),
+  ],
+});
+
+const A12 = symptom(12, "A marketplace value from an event is rejected with HTTP 400", {
+  symptomText: "A command that takes a marketplace argument fails with HTTP 400 when the marketplace value came from an event in koi_koi_raw. The value looks valid but the API refuses it.",
+  cause: "The marketplace field in koi_koi_raw uses SHORT forms (software_windows, chrome, vsc, …). The API and the pack's YAML predefined list use LONG forms (windows, chrome_web_store, vscode, …). The two vocabularies differ for most values — including the single most common event value, software_windows (which the API only accepts as windows) — so a value read from an event and passed to a command unchanged is usually rejected. Some values do coincide and pass through: npm and pypi (pypi is the second most common event value overall), plus homebrew, chocolatey, cursor, docker and claude_desktop_extensions.",
+  evidence: "[LIVE] Verified 21 July 2026 by testing every marketplace value against GET /inventory?marketplace=. The " +
+            "koi_koi_raw marketplace field uses short forms and the API / YAML predefined list uses long forms; the two " +
+            "coincide for only a handful of values and differ for the majority. In a controlled operator test the same " +
+            "day, 16 of 19 real events (84 %) carried a value that failed HTTP 400 unmapped and succeeded once mapped — " +
+            "only pypi worked untouched. [YAML] The " + MARKETPLACE_LONG.length + " long-form names are the predefined " +
+            "list on the marketplace argument.",
+  fix: "Map the event short form to the API long form between reading an event and calling a command. Three event " +
+       "values (" + MKT_NO_API.join(", ") + ") have no API equivalent at all — treat them as \"unknown marketplace\" " +
+       "and do not pass them on.",
+  extra: [
+    rich([tag("YAML"), { text: `${MARKETPLACE_CMDS.length} commands take a marketplace argument and validate it against ` +
+            `the ${MARKETPLACE_LONG.length} long-form names; ${MARKETPLACE_CMDS_REQUIRED.join(" and ")} require it. ` +
+            `Passing a raw event value to any of them fails with HTTP 400.` }]),
+    p("Event short form → API long form. The mapping is the fact; the two count columns are a 21 Jul 2026 snapshot and drift:",
+      { spacing: { before: 120 }, keepNext: true }),
+    table([2750, 1000, 2900, 1050, TW - 7700],
+      [["Event value (koi_koi_raw)", "Events", "API / YAML value", "API items", "Note"]].concat(
+        MARKETPLACE_MAP.map(m => [
+          m.event,
+          num(m.events),
+          m.api === null ? "— none —" : m.api,
+          m.items === null ? "—" : num(m.items),
+          m.api === null
+            ? (m.event === "ollama" ? "not in the API list" : "installation_method value leaking into the field")
+            : (m.api === m.event ? "matches — passes through unchanged" : "must be mapped"),
+        ])), { mono: [0, 2], monoSize: 16 }),
+    rich([tag("LIVE"), { text: "Where the Event and API columns differ, the value is rejected with HTTP 400 if passed " +
+            "to a command unchanged; where they match (Note column), it passes through. The highest-frequency event " +
+            "value, software_windows, differs, so most real traffic needs the mapping (pypi, the second most common, is " +
+            "one of the few that passes through). " + MKT_NO_API.join(", ") + " are not " +
+            "marketplaces at all (built_in and side_loaded are installation_method values that leak into the field; " +
+            "ollama is simply absent from the API's list), so they must be dropped rather than mapped." }],
+         { spacing: { before: 140 } }),
+    rich([tag("LIVE"), { text: "In the companion pack (separate content — see the cover), KOI Ext - Extract Alert " +
+            "Context reads item.marketplace straight from the alert payload and downstream playbooks pass it to " +
+            "koi-inventory-item-get, koi-inventory-item-endpoints-list and koi-blocklist-items-add. The mapping above " +
+            "must be applied between reading the event and calling the command." }]),
+    callout("MAP EVENT VALUES BEFORE CALLING A COMMAND",
+      "Do not feed a marketplace value from an event straight into a command unless you have confirmed it is one of the " +
+      "few that coincide. Map the short form to the long form first. The chrome rows fail HTTP 400 unmapped, and any " +
+      "audit-driven flow using software_windows — the most common value in the dataset — fails likewise. Treat " +
+      MKT_NO_API.join(", ") + " as unknown and drop them.",
+      RED, "FEF2F2"),
+  ],
+});
+
+const A13 = symptom(13, "A host stops producing events — KOI is run-on-demand, and nothing scanned it", {
+  symptomText: "koi_koi_raw is populated overall, but one host has produced no events for days. A tester watching a single quiet host sees an empty result and reports collection as broken.",
+  cause: "KOI has no resident agent on Windows — it is run-on-demand. Between scans nothing runs on the host, so nothing is generated. A scan must be triggered before any events appear, and KOI is change-driven: a scan of an unchanged host still produces nothing.",
+  evidence: "[LIVE] Re-verified first-hand 21 July 2026. Two test hosts (win-workstation, koi-win-test) had produced no " +
+            "events since 15 July — six days — while other hosts reported continuously; nothing was wrong with them, " +
+            "nothing had run the scan. Running KOI Deployment Script - Windows via core-script-run returned " +
+            "COMPLETED_SUCCESSFULLY in 135 s, and a scan of an unchanged host produced no events at all. [INHERITED] The " +
+            "earlier custom-pack investigation established the same run-on-demand behaviour (Part B, B1).",
+  fix: "Do not read an empty result on one host as a collection failure. Confirm a scan has actually run — trigger KOI " +
+       "Deployment Script - Windows through core-script-run — and confirm something changed on the host since the last " +
+       "scan. After a successful scan, events are queryable in koi_koi_raw within roughly 4–10 minutes.",
+  extra: [
+    callout("SCAN, THEN CHANGE, THEN WAIT",
+      "Three things must all be true before a host produces events: (1) a scan has run — KOI is run-on-demand, there is " +
+      "no resident agent between scans; (2) something changed since the last scan — a re-scan of an unchanged host is a " +
+      "no-op, and a re-install of an already-inventoried item is also a no-op because KOI is change-driven; (3) a few " +
+      "minutes have passed — ingestion takes roughly 4–10 minutes after the scan completes. An empty dataset on a quiet " +
+      "host is expected, not a fault.", AMBER, "FFFBEB"),
+    rich([tag("LIVE"), { text: "The scan is driven the same way the Script Runner workflow drives it — a core-script-run " +
+            "of KOI Deployment Script - Windows (name → uid → run). " },
+          tag("PACK"), { text: "That Script Runner workflow is additional content in the separate " + COMPANION.name +
+            " pack, not part of the Marketplace pack; core-script-run itself is Cortex-native." }]),
+  ],
+});
+
+const A14 = symptom(14, "You installed something but KOI doesn't see it", {
+  symptomText: "A package, extension or repository was installed on a scanned host, a scan ran, and it still does not appear in KOI's inventory or events.",
+  cause: "KOI scans user-profile locations and ignores the SYSTEM profile. If the install landed in a SYSTEM-profile path — as anything the Cortex EDR agent installs does, because the agent runs as SYSTEM — KOI never sees it. It is the PATH that decides, not the identity of the installing process.",
+  evidence: "[LIVE] Verified 21 July 2026 by a controlled three-way comparison, all three installs driven by a SYSTEM " +
+            "process. tabulate==0.9.0 landed in the SYSTEM profile and was NOT detected — " +
+            "/inventory/tabulate/endpoints?version=0.9.0 returned HTTP 404. inflection==0.5.1 in a user profile WAS " +
+            "detected (event 09:55:12), and a git clone into a user profile WAS detected (event 09:48:06). Same " +
+            "installing identity throughout, so the path — not the process — is the variable.",
+  fix: "Install into a user-profile path if you want KOI to inventory it. For detection testing, make the change in a " +
+       "user profile the agent scans, and use an item verified absent from the host beforehand — KOI is change-driven, " +
+       "so a re-install of an already-inventoried item produces nothing.",
+  extra: [
+    table([2600, TW - 4200, 1600], [
+      ["Package / item", "Target path", "Detected?"],
+      ["tabulate==0.9.0", "C:\\Windows\\system32\\config\\systemprofile\\…\\site-packages (SYSTEM profile)", "No — 404"],
+      ["inflection==0.5.1", "C:\\Users\\amahmoud\\AppData\\Roaming\\Python\\… (user profile)", "Yes — 09:55:12"],
+      ["octocat/Hello-World (git clone)", "C:\\Users\\amahmoud\\Documents\\koi-test-repo (user profile)", "Yes — 09:48:06"],
+    ], { mono: [0, 1], monoSize: 16 }),
+    callout("PATH, NOT PROCESS",
+      "KOI scans user-profile locations only. A SYSTEM-profile install is invisible no matter what installed it — and " +
+      "anything the Cortex EDR agent runs installs as SYSTEM. This is also why detection tests can be automated through " +
+      "the agent: the requirement is a user-profile path, not an interactive user. B6 is the same surprise from the " +
+      "opposite direction — KOI's own bundled Python makes PyPI packages appear on hosts where nobody installed Python.",
+      AMBER, "FFFBEB"),
+  ],
+});
+
 /* ============================ 7. Environment finding ============================ */
 
 const envFinding = [
@@ -974,15 +1220,19 @@ const triage = [
   triageStep([{ text: "Is this the right pack? ", bold: true },
     { text: `Count the commands — this pack has exactly ${PACK.counts.commands} (section 1.1). Anything device-centric means you are on the custom pack and this guide does not apply.` }]),
   triageStep([{ text: "Commands or events? ", bold: true },
-    { text: "They travel different routes. Failing commands point at the instance, the engine or the API; a missing dataset points at collection (A1)." }]),
+    { text: "They travel different routes. Failing commands point at the instance, the engine or the API; a missing dataset points at collection (A1); a single quiet host that has simply not been scanned produces nothing even while collection is healthy (A13)." }]),
   triageStep([{ text: "Does the instance have Fetch events at all? ", bold: true },
     { text: "No toggle means the wrong pack build — reinstall (A1, B8)." }]),
   triageStep([{ text: "Does koi_koi_raw resolve, and does it split into Audit and Alerts? ", bold: true },
     { text: "If it resolves but your query returns nothing, filter on source_log_type first (section 2.2)." }]),
+  triageStep([{ text: "Are you counting Alerts? ", bold: true },
+    { text: "The Alerts stream is massively duplicated — one row per alert per fetch. Dedupe on the notification id before counting, or before firing per row (A11)." }]),
   triageStep([{ text: "Is the query reading a field that is never populated? ", bold: true },
     { text: "xdm.* never fills (A2); alert_type is always null (A4); resources/observables/metadata need json_extract (A3)." }]),
   triageStep([{ text: "Is the command failing with HTTP 400? ", bold: true },
-    { text: "Check view against the API's accepted set, not the dropdown (A5), and check that filter_json carries {combinator, rules} (A6)." }]),
+    { text: "Check view against the API's accepted set, not the dropdown (A5), check that filter_json carries {combinator, rules} (A6), and if the 400 is on a marketplace value, confirm it is the API long form and not the event short form (A12)." }]),
+  triageStep([{ text: "Installed something the scan should have caught? ", bold: true },
+    { text: "It is inventoried only if it is in a user-profile path — a SYSTEM-profile install is invisible (A14)." }]),
   triageStep([{ text: "Are you testing the path the integration actually uses? ", bold: true },
     { text: "These instances run on an engine — a test from the tenant proves nothing (A8)." }]),
   triageStep([{ text: "Only then look at the endpoint, ", bold: true },
@@ -1055,7 +1305,8 @@ const appendix = [
   table([3800, TW - 3800], [
     ["Input", "Role"],
     ["reference/marketplace-pack.json", "[YAML] Mechanical extraction of the pinned Koi.yml. Every command, argument, default, predefined list, context path, configuration parameter and count in this document is read from it at build time."],
-    ["VERIFIED_FACTS.md", "[LIVE] / [CODE] / [PACK] / [INHERITED] Everything observed on the tenant and the KOI API on 20 July 2026, the facts read from Koi.py and command_examples.txt, what inspection of the pack directory establishes, plus the §8 endpoint findings inherited from the custom-pack investigation."],
+    ["VERIFIED_FACTS.md", "[LIVE] / [CODE] / [PACK] / [INHERITED] Everything observed on the tenant and the KOI API on 20–21 July 2026 — including the 21 July end-to-end scan, marketplace-vocabulary and Alerts-duplication findings (§7b–§7e) folded into A11–A14 — the facts read from Koi.py and command_examples.txt, what inspection of the pack directory establishes, plus the §8 endpoint findings inherited from the custom-pack investigation."],
+    ["Packs/KoiContentExtension/", "[PACK] The separate companion pack. Its name, version and content counts on the cover (parsing rules, modeling rules, playbooks, dashboard) are read from its pack_metadata.json and directory at build time. It is additional content, not part of the Marketplace pack."],
     ["evidence/followup-probes.json", "[LIVE] Raw per-instance probe results, the LATER of the two sweeps. The view matrix in A5, the inventory and view rows in A7 (paired with the earlier sweep wherever the count moved) and the search failure-mode statuses in A6 are read from this file at build time, not transcribed. Its unfiltered_inventory section holds the later no-view inventory total for each instance, probed twice inside the one run — the generator fails rather than print a figure if those two attempts disagree."],
     ["evidence/command-sweep.json", "[LIVE] The EARLIER sweep. Read so that counts which moved between the two runs are printed as earlier → later pairs, both readings coming from the files themselves rather than one being chosen silently over the other. A count that reads the same in both files is printed once, with no arrow."],
     ["docs/build_troubleshooting.js", "This generator."],
@@ -1067,7 +1318,7 @@ const appendix = [
     "the evidence files. Every count here is therefore a snapshot, never a pass/fail threshold — assert on shape " +
     "instead.", AMBER, "FFFBEB"),
   p("Composed rather than quoted:", { bold: true, spacing: { before: 240 } }),
-  bullet([tag("DERIVED"), { text: "The XQL query strings in A1, A2, A3 and A4. The dataset name, the discriminator field and every field name in them are [LIVE]; the query text itself was composed here and was not executed as written." }]),
+  bullet([tag("DERIVED"), { text: "The XQL query strings in A1, A2, A3, A4 and A11. The dataset name, the discriminator field and every field name in them are [LIVE]; the query text itself was composed here and was not executed as written." }]),
   bullet([tag("DERIVED"), { text: "The war-room command lines (!koi-…) shown as examples. Argument names and values are [YAML] or [LIVE]; the commands could not be executed through XSIAM on this tenant — see section 3." }]),
   bullet([tag("DERIVED"), { text: "The two ASCII path diagrams in section 2, which restate the [LIVE] engine and endpoint facts in a different form." }]),
   p("How tagging is applied — the method, not a guarantee:", { bold: true, spacing: { before: 240 } }),
@@ -1136,6 +1387,7 @@ const doc = new Document({
       ...cover, ...buildContents(), ...howToRead,
       ...identity, ...dataPath,
       ...partA_open, ...A1, ...A2, ...A3, ...A4, ...A5, ...A6, ...A7, ...A8, ...A9, ...A10,
+      ...A11, ...A12, ...A13, ...A14,
       ...envFinding, ...partB, ...triage, ...reference, ...appendix,
     ],
   }],
