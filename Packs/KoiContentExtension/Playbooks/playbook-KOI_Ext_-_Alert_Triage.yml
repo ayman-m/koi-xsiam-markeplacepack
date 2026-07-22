@@ -197,6 +197,24 @@ description: |-
        — the item gate keys on item_id alone (task 2), koi-inventory-list takes marketplace as
        an optional FILTER, and KOI Ext - Block and Remediate re-resolves it by item_id and
        SKIPS the blocklist write rather than making a malformed call if it still cannot.
+
+  ============================================================================
+  OPTIONAL XDR ENRICHMENT (Theme D / D5) — best-effort, degrades gracefully
+  ============================================================================
+  A parallel right-hand lane (tasks 33-39) enriches the triage with what Cortex XDR endpoint
+  telemetry saw. It runs ONE XQL query (Theme D / D5) via xdr-xql-generic-query to rebuild the
+  hour either side of this alert on its host: KOI supply-chain audit events, host process
+  executions (with the KOI agent scan split into its own lane), and egress from code-pulling
+  processes. It is keyed on ${KoiContext.alert_hostname} and centred on the alert time
+  (finding_info.created_time, epoch ms). This introduces a dependency on the Cortex XDR - XQL
+  Query Engine integration, which is NOT the KOI integration and is NOT part of this pack; it is
+  declared OPTIONAL (mandatory:false) in pack_metadata.json (pack CortexXDR; on Cortex platform
+  the same command ships in Core). The lane hangs off the first-delivery convergence (tasks
+  31/32), so it runs only for non-duplicate alerts; it is entirely continue-on-error and runs in
+  PARALLEL with the verdict, the analyst gate and the auto-close, never blocking or altering any
+  of them. Missing hostname/time, or the engine absent/slow/rate-limited, and the lane is skipped
+  or errors while triage completes normally. The D5 query reads koi_koi_raw source_log_type =
+  "Audit" (NOT Alerts) and xdr_data, so the Alerts dedupe rule does not apply.
 starttaskid: '0'
 tasks:
   '0':
@@ -549,6 +567,7 @@ tasks:
     nexttasks:
       '#none#':
       - '2'
+      - '33'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 900, "y": 480}}'
@@ -582,6 +601,7 @@ tasks:
     nexttasks:
       '#none#':
       - '2'
+      - '33'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 900, "y": 1040}}'
@@ -1257,7 +1277,9 @@ tasks:
 
           | Alert type | ${KoiContext.alert_type} (constant "policy_violation" on this data - not used in the verdict) |
 
-          _Org inventory risk is the organization''s own record for this item, from koi-inventory-list. An empty value is INCONCLUSIVE - the inventory index lags the event stream, so a freshly-alerted item routinely has no record yet - and must not be read as "not present in the organization". The Marketplace KOI pack v1.2.3 has no Koidex catalog risk report and no AI risk summary._'
+          _Org inventory risk is the organization''s own record for this item, from koi-inventory-list. An empty value is INCONCLUSIVE - the inventory index lags the event stream, so a freshly-alerted item routinely has no record yet - and must not be read as "not present in the organization". The Marketplace KOI pack v1.2.3 has no Koidex catalog risk report and no AI risk summary._
+
+          _Optional XDR enrichment: when the Cortex XDR - XQL Query Engine is present, a separate war-room note posts the hour either side of this alert on the host (Theme D / D5) — other KOI installs, host process executions, and egress from code-pulling processes. Best-effort; absent when the engine is not installed, and it never affects the verdict, the analyst gate, or the auto-close._'
       append:
         simple: 'false'
     nexttasks:
@@ -1512,7 +1534,289 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 1650, "x": 60, "y": 20}}}'
+  '33':
+    id: '33'
+    taskid: koiextri-0000-4000-8000-000000000033
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000033
+      version: -1
+      name: Capture the alert time for the XDR window
+      description: 'OPTIONAL XDR ENRICHMENT (best-effort, continue-on-error). Reads finding_info.created_time (epoch milliseconds) parsed into KoiRaw.finding_info by KOI Ext - Extract Alert Context, which ran with separatecontext:false so KoiRaw is in this playbook''s context. This is the alert''s own creation time and becomes the centre of the +/-60 minute window in the D5 query below. Empty when created_time is absent — the next condition then skips the enrichment. This lane runs only for non-duplicate deliveries (it hangs off the first-delivery convergence, tasks 31/32) and never touches the verdict, the analyst gate, or the auto-close.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.xdr_alert_epoch_ms
+      value:
+        complex:
+          root: KoiRaw.finding_info
+          accessor: created_time
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '34'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1650, "y": 620}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '34':
+    id: '34'
+    taskid: koiextri-0000-4000-8000-000000000034
+    type: condition
+    task:
+      id: koiextri-0000-4000-8000-000000000034
+      version: -1
+      name: Can the XDR alert-context query run?
+      description: 'Runs the D5 enrichment only when BOTH the alert hostname and the alert epoch are known — the query keys on agent_hostname and centres its window on the epoch. Either missing -> the lane is skipped with a note and triage is unaffected. This is the graceful-degradation gate for the optional Cortex XDR - XQL Query Engine dependency.'
+      iscommand: false
+      brand: ''
+      type: condition
+    conditions:
+    - label: 'yes'
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiContext.alert_hostname
+          operator: isNotEmpty
+          right:
+            value: {}
+      - - left:
+            iscontext: true
+            value:
+              simple: KoiTriage.xdr_alert_epoch_ms
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '39'
+      'yes':
+      - '35'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1650, "y": 760}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '35':
+    id: '35'
+    taskid: koiextri-0000-4000-8000-000000000035
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000035
+      version: -1
+      name: Clear prior XQL results (alert context)
+      description: Deletes PaloAltoNetworksXQL.GenericQuery so the alert-context query writes a clean result. xdr-xql-generic-query appends to that path.
+      iscommand: false
+      brand: ''
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '36'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1650, "y": 900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '36':
+    id: '36'
+    taskid: koiextri-0000-4000-8000-000000000036
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000036
+      version: -1
+      name: Alert in context — the hour either side (XQL)
+      description: 'THEME D / D5 — the highest-value triage enrichment. Runs xdr-xql-generic-query (Cortex XDR - XQL Query Engine, NOT a KOI command) to rebuild the hour either side of this one alert on its host: KOI supply-chain audit events, host process executions (with the KOI agent scan separated into its own lane), and egress from code-pulling processes. Keyed on ${KoiContext.alert_hostname} and centred on the alert epoch ${KoiTriage.xdr_alert_epoch_ms}. The koi_koi_raw side reads source_log_type = "Audit" (NOT Alerts), so the Alerts dedupe rule does not apply. continue-on-error: the verdict, the analyst gate and the auto-close all run independently of this.'
+      iscommand: true
+      brand: ''
+      script: '|||xdr-xql-generic-query'
+      type: regular
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = koi_koi_raw
+          | filter source_log_type = "Audit"
+          | filter hostname = "${KoiContext.alert_hostname}"
+          | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
+          | filter abs(mins_from_alert) <= 60
+          | alter lane   = "KOI_SUPPLY_CHAIN"
+          | alter detail = coalesce(message, concat(coalesce(action, "?"), " ", coalesce(object_name, "?")))
+          | fields _time, mins_from_alert, lane, detail
+          | union
+          (dataset = xdr_data
+           | filter event_type = ENUM.PROCESS
+           | filter agent_hostname = "${KoiContext.alert_hostname}"
+           | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
+           | filter abs(mins_from_alert) <= 60
+           | alter lane   = if(actor_process_image_path contains "Koi", "KOI_AGENT_SCAN", "XDR_EXECUTION")
+           | alter detail = coalesce(action_process_image_command_line, action_process_image_name)
+           | fields _time, mins_from_alert, lane, detail)
+          | union
+          (dataset = xdr_data
+           | filter event_type = ENUM.NETWORK
+           | filter agent_hostname = "${KoiContext.alert_hostname}"
+           | filter actor_process_image_name in ("git.exe", "pip.exe", "pip3.exe", "npm.exe", "npx.exe", "node.exe", "curl.exe", "wget.exe", "python.exe", "winget.exe", "msiexec.exe")
+           | alter mins_from_alert = timestamp_diff(_time, to_timestamp(${KoiTriage.xdr_alert_epoch_ms}, "MILLIS"), "MINUTE")
+           | filter abs(mins_from_alert) <= 60
+           | alter lane   = "XDR_EGRESS"
+           | alter detail = concat(coalesce(actor_process_image_name, "?"), " -> ", coalesce(action_remote_ip, "?"), ":", to_string(action_remote_port), " (", coalesce(action_country, "?"), ")")
+           | fields _time, mins_from_alert, lane, detail)
+          | sort asc _time
+          | limit 500
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+      query_name:
+        simple: KOI Ext - Alert in context
+    nexttasks:
+      '#error#':
+      - '37'
+      '#none#':
+      - '37'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 1650, "y": 1040}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '37':
+    id: '37'
+    taskid: koiextri-0000-4000-8000-000000000037
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000037
+      version: -1
+      name: Post XDR alert-context header
+      description: Prints a header for the optional XDR alert-context enrichment, including the row count and an explicit note that a blank means either a quiet hour or that the XQL engine is not installed.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: |-
+          ### XDR alert context — ${KoiContext.alert_hostname} (optional XQL enrichment)
+          Cortex XDR endpoint telemetry for the hour either side of this alert (Theme D / D5): KOI supply-chain audit events, host process executions (the KOI agent scan is split into its own lane so it is not mistaken for adversary activity), and egress from code-pulling processes. Rows returned: **${PaloAltoNetworksXQL.GenericQuery.number_of_results}**. Each row carries mins_from_alert, a signed offset in minutes from the alert. A blank means either nothing else happened on the host in that window, OR the optional Cortex XDR - XQL Query Engine is not installed — this enrichment is best-effort and never blocks the verdict, the analyst gate, or the auto-close.
+    nexttasks:
+      '#none#':
+      - '38'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1650, "y": 1220}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '38':
+    id: '38'
+    taskid: koiextri-0000-4000-8000-000000000038
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000038
+      version: -1
+      name: Post XDR alert-context table
+      description: Prints the three-lane alert-in-context timeline as a table to the war room. Best-effort; empty when there is nothing to show or the XQL engine is absent.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1650, "y": 1390}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '39':
+    id: '39'
+    taskid: koiextri-0000-4000-8000-000000000039
+    type: regular
+    task:
+      id: koiextri-0000-4000-8000-000000000039
+      version: -1
+      name: Record - XDR alert context skipped
+      description: The optional XDR alert-context enrichment needs both the alert hostname and the alert time; one or both were unavailable, so the lane was skipped. Triage is unaffected.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiTriage.xdr_context_state
+      value:
+        simple: 'XDR alert-context enrichment skipped: alert hostname or alert time was not available, so the D5 query could not run. Triage completed without it.'
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '23'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1980, "y": 900}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3370, "width": 2150, "x": 60, "y": 20}}}'
 inputs:
 - key: instance_name
   value: {}
@@ -1535,6 +1839,12 @@ inputs:
     simple: 3 days
   required: false
   description: How far back to look for an earlier alert carrying the same KOI notification id. Must be at least as long as KOI keeps re-sending one alert; the longest re-send run observed on live data is 6.8 hours (408 deliveries, one per minute). Only used when dedupe_alert_field is set.
+  playbookInputQuery: null
+- key: xql_time_frame
+  value:
+    simple: 24 hours
+  required: false
+  description: 'Time frame for the OPTIONAL XDR alert-context XQL query (Theme D / D5), passed to xdr-xql-generic-query. Must span from now back past the alert time so the +/-60 minute window resolves; "24 hours" suits a freshly-delivered alert, widen it for older alerts. Only used when the alert carries a hostname and time and the Cortex XDR - XQL Query Engine integration is present; the enrichment is best-effort and skipped otherwise.'
   playbookInputQuery: null
 outputs:
 - contextPath: KoiTriage.verdict
@@ -1564,6 +1874,15 @@ outputs:
 - contextPath: KoiTriage.self_alert_id
   description: This alert's own id, used to exclude it from the duplicate search. Empty means ${alert.id} did not resolve and duplicate suppression was skipped.
   type: string
+- contextPath: KoiTriage.xdr_alert_epoch_ms
+  description: 'Optional XDR enrichment: the alert''s creation time (finding_info.created_time) in epoch milliseconds, used to centre the D5 alert-context window.'
+  type: string
+- contextPath: KoiTriage.xdr_context_state
+  description: 'Optional XDR enrichment: set when the XDR alert-context lane was skipped (no hostname or no alert time).'
+  type: string
+- contextPath: PaloAltoNetworksXQL.GenericQuery
+  description: 'Optional XDR enrichment: raw result of the xdr-xql-generic-query alert-context query (results, number_of_results, execution_id). Present only when the Cortex XDR - XQL Query Engine integration is installed.'
+  type: unknown
 tags:
 - koi
 - koi-ext

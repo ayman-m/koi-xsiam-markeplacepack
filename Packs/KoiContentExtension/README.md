@@ -288,6 +288,48 @@ Declared as **mandatory** in `pack_metadata.json`:
 | `FiltersAndTransformers` | Filters And Transformers | The `ParseJSON`, `JsonToTable`, `SetIfEmpty`, `FormatTemplate` and `LastArrayElement` transformers used in context expressions |
 | `Core` | Core | The `Cortex Core - IR` integration, for `core-get-scripts`, `core-get-endpoints` and `core-script-run` in the three `Unified *` playbooks |
 
+Declared as **optional** (`mandatory: false`) in `pack_metadata.json`:
+
+| Pack id | Display name | Why |
+|---|---|---|
+| `CortexXDR` | Cortex XDR by Palo Alto Networks | Provides the **Cortex XDR - XQL Query Engine** integration and its `xdr-xql-generic-query` command, used by the optional XDR-correlation enrichment described below. Not required for the pack to install or function |
+
+### Optional — Cortex XDR × KOI correlation enrichment (XQL)
+
+Three of the investigation playbooks carry a **best-effort XDR enrichment** that correlates the KOI
+supply-chain picture with what Cortex XDR endpoint telemetry actually saw. Each runs the validated
+Theme-D XQL query for its context through **`xdr-xql-generic-query`** (output on
+`PaloAltoNetworksXQL.GenericQuery`):
+
+| Playbook | Query | Answers | Keyed on |
+|---|---|---|---|
+| `KOI Ext - Investigate Item` | Theme D / **D2** | Did anything from this item's install path actually execute, load, or get written to disk? | `Inv.item_id` (fleet-wide — this playbook is item-centric) |
+| `KOI Ext - Investigate Device` | Theme D / **D3c** + **D4** | When did KOI last actually *scan* this host (KOI is run-on-demand on Windows), and what arrived vs which process brought it? | `inputs.hostname` |
+| `KOI Ext - Alert Triage` | Theme D / **D5** | The hour either side of this alert on the host — other KOI installs, host process executions, and egress from code-pulling processes | `KoiContext.alert_hostname` + the alert time |
+
+This is where the enrichment sits relative to the governing rule of this pack — *stay within what the
+KOI Marketplace integration supplies.* It **introduces a dependency on the Cortex XDR - XQL Query
+Engine integration, which is NOT the KOI integration and is NOT part of this pack.** That is
+acceptable because it uses platform telemetry rather than a fabricated KOI capability, and it is
+engineered to disappear cleanly when the engine is absent:
+
+- **Optional dependency.** Declared `mandatory: false` (`CortexXDR`). The pack installs and every
+  KOI-command task works with no XQL engine present. On the Cortex **platform** the same
+  `xdr-xql-generic-query` command ships in the already-mandatory **`Core`** pack; on the
+  **marketplacev2** marketplace it is the standalone **`CortexXDR`** pack — hence that is the id
+  declared optional.
+- **Parallel, never in the critical path.** Each enrichment is a separate lane branched off the
+  existing flow; it does not sit between existing tasks and does not feed the verdict, the analyst
+  approval gate, or the auto-close.
+- **Every XQL task is `continueonerror`.** XQL can be slow, rate-limited, or the engine absent — any
+  of those errors the lane and the investigation/triage still completes. The war-room note then
+  states plainly that the enrichment degraded, so a blank is never mistaken for "nothing found".
+- **Tunable.** Each playbook exposes an `xql_time_frame` input (default `7 days` for the
+  investigations, `24 hours` for triage).
+- **Dedupe rule respected.** The embedded queries read `xdr_data` and `koi_koi_raw`
+  `source_log_type = "Audit"` only. None reads `source_log_type = "Alerts"`, so the Alerts
+  dedupe-on-`notification_event_id` rule (caveat 8) does not apply to any of them.
+
 ### Not declared — a mail-sender integration
 
 `KOI Ext - Unified Process Config Entry` sends its result mail with the generic **`send-mail`**

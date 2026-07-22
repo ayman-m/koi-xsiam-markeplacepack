@@ -67,6 +67,19 @@ description: |-
   There is deliberately exactly one inventory call in this playbook. Do not add a second to
   "also fetch" something - it will replace the first. koi-inventory-item-endpoints-list is
   safe; it writes only Koi.Inventory.Endpoint.*.
+
+  OPTIONAL XDR ENRICHMENT (Theme D / D2) — best-effort, degrades gracefully.
+  A parallel right-hand lane (tasks 34-38) runs one XQL query (Theme D / D2) via
+  xdr-xql-generic-query to answer "KOI says this item is installed — did anything from it
+  actually execute, load, or get written to disk?". It is parameterised on ${Inv.item_id}
+  and searches xdr_data fleet-wide (this playbook is item-centric and holds no single host).
+  This introduces a dependency on the Cortex XDR - XQL Query Engine integration, which is NOT
+  the KOI integration and is NOT part of this pack. It is declared OPTIONAL (mandatory:false)
+  in pack_metadata.json (pack CortexXDR; on Cortex platform the same command ships in Core).
+  Every task in the lane is continue-on-error, runs in PARALLEL with the KOI investigation and
+  never blocks it: if the engine is absent, slow or rate-limited the lane errors and is
+  skipped, the war-room note says so, and the investigation completes unchanged. The query
+  uses only xdr_data, so the koi_koi_raw Alerts dedupe rule does not apply.
 starttaskid: '0'
 tasks:
   '0':
@@ -123,6 +136,7 @@ tasks:
     nexttasks:
       '#none#':
       - '2'
+      - '34'
     separatecontext: false
     continueonerrortype: ''
     view: '{"position": {"x": 450, "y": 200}}'
@@ -1188,6 +1202,11 @@ tasks:
           just alerted routinely has no inventory record YET; a blank row means "KOI's
           inventory has not answered for this item", not "the organization does not have it",
           and certainly not "it is low risk".
+
+          _Optional XDR enrichment: when the Cortex XDR - XQL Query Engine is present, a separate
+          war-room note posts XDR runtime evidence for this item (did anything from it execute or
+          get written to disk, Theme D / D2). It is best-effort and absent when the engine is not
+          installed._
       append:
         simple: 'false'
     nexttasks:
@@ -1381,7 +1400,192 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 4220, "width": 780, "x": 250, "y": 50}}}'
+  '34':
+    id: '34'
+    taskid: koixiv00-0000-4000-8000-000000000034
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000034
+      version: -1
+      name: Clear prior XQL results (optional XDR enrichment)
+      description: 'OPTIONAL XDR ENRICHMENT (best-effort, continue-on-error). Deletes PaloAltoNetworksXQL.GenericQuery so the XDR runtime-evidence query below writes a clean result, mirroring the Koi.Inventory context-hygiene pattern. This whole right-hand lane runs in PARALLEL with the KOI investigation and never blocks it: it depends only on the Cortex XDR - XQL Query Engine integration (command xdr-xql-generic-query), which is NOT part of the KOI pack. If that engine is absent the tasks error and are skipped, and the investigation completes unchanged.'
+      iscommand: false
+      brand: ''
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+      subplaybook:
+        simple: auto
+    nexttasks:
+      '#none#':
+      - '35'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1200, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '35':
+    id: '35'
+    taskid: koixiv00-0000-4000-8000-000000000035
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000035
+      version: -1
+      name: XDR runtime evidence for the item (XQL)
+      description: 'THEME D / D2 — bridges "KOI says this item is installed" to "did anything from it actually execute, load, or get written to disk". Runs xdr-xql-generic-query (Cortex XDR - XQL Query Engine, NOT a KOI command) over xdr_data PROCESS/FILE/LOAD_IMAGE for a case-insensitive match on the item id in the artifact path or command line. Parameterised on ${Inv.item_id} (the item this playbook is already investigating), fleet-wide — this playbook is item-centric and holds no single hostname, so the host filter is deliberately dropped as D2 documents. The query touches only xdr_data, so the Alerts dedupe rule does not apply. continue-on-error: XQL may be slow, rate-limited, or the engine absent; any of those leaves the KOI investigation intact.'
+      iscommand: true
+      brand: ''
+      script: '|||xdr-xql-generic-query'
+      type: regular
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = xdr_data
+          | filter event_type in (ENUM.PROCESS, ENUM.FILE, ENUM.LOAD_IMAGE)
+          | alter artifact_path = coalesce(action_process_image_path, action_file_path, action_module_path)
+          | alter cmdline       = action_process_image_command_line
+          | filter lowercase(coalesce(artifact_path, "")) contains lowercase("${Inv.item_id}")
+                or lowercase(coalesce(cmdline, ""))       contains lowercase("${Inv.item_id}")
+          | alter evidence_kind = if(event_type = ENUM.PROCESS, "executed", if(event_type = ENUM.LOAD_IMAGE, "loaded_as_module", "written_to_disk"))
+          | fields _time, agent_hostname, evidence_kind, event_type, artifact_path, cmdline, action_process_image_name, action_process_username, action_process_signature_status, actor_process_image_name, actor_process_command_line
+          | sort asc _time
+          | limit 200
+      time_frame:
+        simple: ${inputs.xql_time_frame}
+      query_name:
+        simple: KOI Ext - XDR runtime evidence for item
+    nexttasks:
+      '#error#':
+      - '36'
+      '#none#':
+      - '36'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 1200, "y": 370}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '36':
+    id: '36'
+    taskid: koixiv00-0000-4000-8000-000000000036
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000036
+      version: -1
+      name: Count XDR runtime-evidence rows
+      description: Captures the number of XDR endpoint-telemetry rows that reference this item, for the war-room note below. Empty when the engine is absent or nothing matched.
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiInvestigation.xdr_evidence_count
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: number_of_results
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '37'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 1200, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '37':
+    id: '37'
+    taskid: koixiv00-0000-4000-8000-000000000037
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000037
+      version: -1
+      name: Post XDR runtime-evidence header
+      description: Prints a short header for the optional XDR enrichment to the war room, stating what it is and that a blank means the enrichment degraded (nothing matched, or the XQL engine is not installed).
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        simple: |-
+          ### XDR runtime evidence — ${Inv.item_id} (optional XQL enrichment)
+          Cortex XDR endpoint-telemetry rows over ${inputs.xql_time_frame}, fleet-wide, where this item's install path or command line appears: **${KoiInvestigation.xdr_evidence_count}**. A row with evidence_kind=executed/loaded_as_module means it actually ran; written_to_disk is on-disk proof only. A blank count means either nothing from this item was seen in the window, OR the optional Cortex XDR - XQL Query Engine is not present on this tenant — this enrichment is best-effort and degrades gracefully; the KOI investigation above is unaffected.
+    nexttasks:
+      '#none#':
+      - '38'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1200, "y": 710}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '38':
+    id: '38'
+    taskid: koixiv00-0000-4000-8000-000000000038
+    type: regular
+    task:
+      id: koixiv00-0000-4000-8000-000000000038
+      version: -1
+      name: Post XDR runtime-evidence table
+      description: Prints the XDR runtime-evidence rows as a table to the war room. Best-effort; empty when there is nothing to show.
+      iscommand: false
+      brand: ''
+      script: Print
+      type: regular
+    scriptarguments:
+      value:
+        complex:
+          root: PaloAltoNetworksXQL.GenericQuery
+          accessor: results
+          transformers:
+          - operator: JsonToTable
+    nexttasks:
+      '#none#':
+      - '24'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ''
+    view: '{"position": {"x": 1200, "y": 880}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 4220, "width": 1480, "x": 250, "y": 50}}}'
 inputs:
 - key: item_id
   value: {}
@@ -1402,6 +1606,12 @@ inputs:
   value: {}
   required: false
   description: The KOI integration instance to use. Leave empty to use the single configured instance.
+  playbookInputQuery: null
+- key: xql_time_frame
+  value:
+    simple: 7 days
+  required: false
+  description: 'Time frame for the OPTIONAL XDR runtime-evidence XQL query (Theme D / D2), passed to xdr-xql-generic-query. Relative format, e.g. "24 hours", "7 days". Only used when the Cortex XDR - XQL Query Engine integration is present; the enrichment is best-effort and skipped when it is not.'
   playbookInputQuery: null
 outputs:
 - contextPath: KoiInvestigation
@@ -1452,6 +1662,12 @@ outputs:
 - contextPath: KoiInvestigation.summary
   description: Markdown investigation summary, including an explicit statement of what this pack cannot determine.
   type: string
+- contextPath: KoiInvestigation.xdr_evidence_count
+  description: 'Optional XDR enrichment (Theme D / D2): number of Cortex XDR endpoint-telemetry rows referencing this item. Empty when the XQL Query Engine is absent or nothing matched.'
+  type: number
+- contextPath: PaloAltoNetworksXQL.GenericQuery
+  description: 'Optional XDR enrichment: raw result of the xdr-xql-generic-query runtime-evidence query (results, number_of_results, execution_id). Present only when the Cortex XDR - XQL Query Engine integration is installed.'
+  type: unknown
 - contextPath: Koi.Inventory
   description: The organization's inventory record for the item.
   type: unknown
