@@ -27,7 +27,7 @@ dataset = xdr_data
       | alter koi_pkg = lowercase(object_name)
       | comp count() as koi_audit_events, max(_time) as koi_last_seen by koi_pkg
   ) as koi koi.koi_pkg = exec_pkg
-| alter koi_coverage = if(koi_pkg = null, "SHADOW_MCP_NOT_IN_KOI", "KNOWN_TO_KOI")
+| alter koi_coverage = if(koi.koi_pkg = null, "SHADOW_MCP_NOT_IN_KOI", "KNOWN_TO_KOI")
 | fields agent_hostname, causality_actor_process_image_name, exec_pkg, koi_coverage,
-         koi_audit_events, koi_last_seen, spawns, first_exec, last_exec
+         koi.koi_audit_events, koi.koi_last_seen, spawns, first_exec, last_exec
 | sort asc koi_coverage, desc spawns

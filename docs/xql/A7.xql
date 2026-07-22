@@ -14,7 +14,7 @@ dataset = xdr_data
 | filter event_type = ENUM.PROCESS
 // The KOI-bundled interpreter. Anchored on the vendor's own install path so it cannot be
 // confused with any other Python on the box.
-| filter action_process_image_path ~= "(?i)AppData.Local.Koi.Python"
+| filter action_process_image_path ~= "(?i)\\AppData\\Local\\Koi\\Python\\"
 | alter scan_host   = lowercase(agent_hostname),
         scan_time   = _time,
         koi_payload = arrayindex(regextract(action_process_image_command_line, "(?i)(tmp[0-9A-Fa-f]+\.tmp\.pyz?)"), 0),
@@ -27,7 +27,6 @@ dataset = xdr_data
     by scan_host, agent_hostname, launched_by, scan_user
 | alter minutes_since_last_scan = timestamp_diff(current_time(), last_scan, "MINUTE")
 | alter inventory_confidence = if(
-    // PARAM: staleness thresholds, in minutes. 60/1440 suits a ~29-minute scan cadence.
     minutes_since_last_scan <= 60,   "fresh - inventory reflects the last hour",
     minutes_since_last_scan <= 1440, "aging - up to a day of drift",
     "STALE - KOI inventory for this host may be days out of date")

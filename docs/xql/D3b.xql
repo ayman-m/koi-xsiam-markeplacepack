@@ -1,17 +1,9 @@
-// Theme D / D3b - Recent supply-chain changes on a host, classified.
-// The narrative feed for a device investigation: change_class says what kind of change it
-// was, agentic_surface says whether it touched an agent/IDE surface or is just Chrome
-// updating itself.
-// Verified action vocabulary on this tenant: installed, updated, uninstalled, archived,
-// unarchived, remediation_opened, remediation_executed, remediation_pending, created,
-// allowlist_items_added, enabled, disabled, email_sent - plus approval_requests rows where
-// action is NULL, which is why the if-chain ends in "other".
-// PARAM: koi_host = inputs.hostname
-// PARAM: lookback = set on the query timeframe (7d in the worked example)
-// Investigation.
+// KOI Ext - Investigate Device, step "recent supply-chain changes on this device".
+// PARAM: koi_host  = inputs.hostname
+// PARAM: lookback  = set on the query timeframe (7d used in the worked example)
 dataset = koi_koi_raw
 | filter source_log_type = "Audit"
-| filter hostname = "win-workstation"                                  // PARAM: koi_host
+| filter hostname = "win-workstation"                                  // PARAM
 | alter change_class = if(type = "remediation", "remediation",
                        if(action in ("installed", "updated"), "acquisition",
                        if(action = "uninstalled", "removal", "other")))

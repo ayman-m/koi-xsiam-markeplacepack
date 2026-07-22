@@ -28,29 +28,29 @@ dataset = xdr_data
 | join type = inner (
       dataset = koi_koi_raw
       | filter source_log_type = "Alerts"
-      | alter res = resources
-      | alter r0type = json_extract_scalar(res, "$[0].type")
+      | alter res = to_json_string(resources)
+      | alter r0type = json_extract_scalar(res, "$.0.type")
       | filter r0type = "mcp" or r0type = "item"
       // MANDATORY: the integration re-sends every open alert each 1-minute fetch cycle
       // (~245x duplication). Dedupe on the notification event id, never on _id.
       | alter koi_event_id = json_extract_scalar(metadata, "$.notification_event_id")
       | dedup koi_event_id
       | alter
-          koi_pkg       = lowercase(json_extract_scalar(res, "$[0].data.package_name")),
-          koi_risk      = json_extract_scalar(res, "$[0].data.risk_level"),
-          koi_market    = json_extract_scalar(res, "$[0].data.marketplace"),
-          koi_transport = json_extract_scalar(res, "$[0].data.transport"),
+          koi_pkg       = lowercase(json_extract_scalar(res, "$.0.data.package_name")),
+          koi_risk      = json_extract_scalar(res, "$.0.data.risk_level"),
+          koi_market    = json_extract_scalar(res, "$.0.data.marketplace"),
+          koi_transport = json_extract_scalar(res, "$.0.data.transport"),
           koi_res_type  = r0type,
-          koi_device    = json_extract_scalar(res, "$[1].data.hostname")
+          koi_device    = json_extract_scalar(res, "$.1.data.hostname")
       | comp count_distinct(koi_device) as koi_devices, max(_time) as koi_last_alert
          by koi_pkg, koi_risk, koi_market, koi_transport, koi_res_type
   ) as koi koi.koi_pkg = exec_pkg
 | alter verdict = if(
-      koi_risk = "critical" or koi_risk = "high", "CONFIRMED_RISK_EXECUTING",
-      koi_risk = "medium",                            "MEDIUM_RISK_EXECUTING",
-      koi_risk = "pending",                           "UNSCORED_BUT_EXECUTING",
+      koi.koi_risk = "critical" or koi.koi_risk = "high", "CONFIRMED_RISK_EXECUTING",
+      koi.koi_risk = "medium",                            "MEDIUM_RISK_EXECUTING",
+      koi.koi_risk = "pending",                           "UNSCORED_BUT_EXECUTING",
                                                           "SCORED_LOW_EXECUTING")
 | fields agent_hostname, causality_actor_process_image_name, exec_pkg, verdict,
-         koi_risk, koi_res_type, koi_transport, koi_market,
-         koi_devices, koi_last_alert, spawns, first_exec, last_exec
+         koi.koi_risk, koi.koi_res_type, koi.koi_transport, koi.koi_market,
+         koi.koi_devices, koi.koi_last_alert, spawns, first_exec, last_exec
 | sort desc spawns

@@ -1,250 +1,164 @@
-# XQL detection and investigation queries — KOI supply chain × Cortex XDR
+# XQL detection & investigation queries — KOI supply chain × Cortex XDR
 
-**Pack under test:** the official **Marketplace KOI pack**, `demisto/content` `Packs/Koi` **v1.2.3**
-(integration only, 13 commands). This is *not* the 26-command custom pack at `../KOI`. The
-Marketplace pack ships **no modeling rules**, so it never declares a dataset name — `koi_koi_raw`
-is the `{vendor}_{product}_raw` convention, confirmed by query against the live tenant.
+**Pack context:** built for the official **Marketplace KOI pack v1.2.3** (`demisto/content` `Packs/Koi`, 13 commands, integration only) and its dataset `koi_koi_raw`, correlated with Cortex XDR endpoint telemetry `xdr_data`. Validated on tenant `api-ayman.xdr.eu` on 2026-07-21/22.
 
-**Tenant:** `api-ayman.xdr.eu.paloaltonetworks.com`
-**Datasets:** `koi_koi_raw` (KOI supply-chain inventory and alerts), `xdr_data` (Cortex XDR endpoint
-telemetry).
+## How to read status
 
-**Scope of this document:** queries only. No pack content, playbook, rule or dashboard was modified.
+- **validated** — executed against the live tenant; row count is real.
+- **parse-confirmed** — the XQL engine accepted it (query_id issued) but it is a heavy join that exceeds the validation poll window; run it with a narrow time filter. Not known-bad.
+
+## Rules that apply to every query here
+
+1. **Alerts are duplicated ~245× per 24h** (the integration re-sends every open alert each 1-minute fetch). Any query over `source_log_type = "Alerts"` **must** dedupe on `json_extract_scalar(metadata, "$.notification_event_id")` — never `count()` rows. **Audit is not duplicated (1.0)** and needs no dedupe; most queries here use Audit for exactly that reason.
+
+2. **One host is dual-covered** (KOI + XDR) on this tenant — `win-workstation`. Coverage-gap queries derive the dual-covered set from data rather than hardcoding it.
+
+3. **Marketplace vocabulary differs** between events (short: `chrome`, `vsc`, `software_windows`) and the API (long: `chrome_web_store`, `vscode`, `windows`). See `VERIFIED_FACTS.md` §7c.
+
+4. `dns_query_name` is 0% populated here; `action_external_hostname` ~56%. Do not build a detection that requires DNS names on this tenant.
+
 
 ---
 
-## 1. Validation status — read this before using anything here
+## Theme A — Supply-chain acquisition
 
-Four agents designed these queries and each ran theirs against the live tenant. This document is the
-curation pass: re-run everything, enforce the Alerts dedupe rule, merge duplicates, rank, and
-parameterise.
+_How an item arrived — which process, user and parent brought it. koi_koi_raw Audit × xdr_data PROCESS._
 
-**The re-run could not be performed.** The tenant's daily XQL Compute Unit quota was exhausted before
-this pass began:
+_8 queries._
 
+
+### A1 — Package-manager and downloader execution with full acquisition provenance
+
+**Purpose:** both · **Status:** validated (46 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+For every supply-chain acquisition command run anywhere on the estate: which tool, which user, which parent process, which working directory, and the full command line?
+
+
+_Parameters:_ None. Scope with `| filter agent_hostname = "..."` or `| filter acquisition_tool = "pip"` to turn it into a detection.
+
+
+```sql
+/* THEME A - Q1 : Package-manager / downloader execution with full acquisition provenance.
+   Purpose        : investigation (and detection when scoped by tool or run_context)
+   Datasets       : xdr_data (PROCESS)
+   What it answers: for every supply-chain acquisition command on the estate - which tool,
+                    which user, which parent process, which working directory, full command line.
+   Tools matched were confirmed present on this tenant: pip, uv, npm/npx, git, curl,
+   Invoke-WebRequest. yarn/pnpm/choco/winget/brew/go/cargo/gem are included so the query
+   travels to estates that have them; they are simply quiet here. */
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+// Match on the command line, not the image name: pip and npm are usually reached through
+// python.exe -m pip, cmd /c, wsl.exe or a shell, so image-name matching misses most of them.
+| filter action_process_image_command_line ~= "(?i)(pip3?\s+(install|download)|uv\s+(pip|add|tool)\s|npm\s+(i|install|add|ci)\s|npx\s|yarn\s+(add|install)|pnpm\s+(add|install|i)\s|git\s+clone|curl\s+[^|]*http|wget\s+http|choco\s+install|winget\s+install|brew\s+install|Invoke-WebRequest|Install-Module|Install-Package|go\s+install|cargo\s+install|gem\s+install)"
+| alter acquisition_tool = if(
+    action_process_image_command_line ~= "(?i)uv\s+(pip|add|tool)\s", "uv",
+    action_process_image_command_line ~= "(?i)pip3?\s+(install|download)", "pip",
+    action_process_image_command_line ~= "(?i)(npm\s+(i|install|add|ci)\s|npx\s)", "npm",
+    action_process_image_command_line ~= "(?i)yarn\s+(add|install)", "yarn",
+    action_process_image_command_line ~= "(?i)pnpm\s+(add|install|i)\s", "pnpm",
+    action_process_image_command_line ~= "(?i)git\s+clone", "git",
+    action_process_image_command_line ~= "(?i)brew\s+install", "brew",
+    action_process_image_command_line ~= "(?i)choco\s+install", "choco",
+    action_process_image_command_line ~= "(?i)winget\s+install", "winget",
+    action_process_image_command_line ~= "(?i)(Install-Module|Install-Package)", "psgallery",
+    action_process_image_command_line ~= "(?i)go\s+install", "go",
+    action_process_image_command_line ~= "(?i)cargo\s+install", "cargo",
+    action_process_image_command_line ~= "(?i)gem\s+install", "gem",
+    "http-download")
+// Who really ran it. Anchored suffix match - "NT AUTHORITY\SYSTEM" cannot be matched with
+// an `in` list because XQL does not unescape the backslash inside a string literal.
+| alter run_context = if(
+    action_process_username ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$" or action_process_username = "root",
+    "non-interactive / service context", "interactive user")
+| alter installed_for_user = arrayindex(regextract(action_process_image_command_line, "(?i)[Cc]:\\Users\\([A-Za-z0-9._-]+)"), 0)
+| fields _time, agent_hostname, agent_id, acquisition_tool, run_context,
+         action_process_username, installed_for_user,
+         action_process_image_name, action_process_cwd,
+         action_process_image_command_line,
+         actor_process_image_name, actor_process_command_line,
+         causality_actor_process_image_name,
+         action_process_image_sha256, action_process_causality_id
+| sort desc _time
+| limit 500
 ```
-"err_msg": "query usage exceeded max daily quota",
-"quota_info": {"used_quota": 1.0, "max_quota": 1.0, "error_type": "QUOTA_EXCEEDED",
-               "message": "The daily number of remaining Compute Units (0.0) is insufficient"},
-"total_daily_running_queries": 2264,
-"total_daily_concurrent_rejected_queries": 47
+
+
+_Interpretation:_ 46 rows over 24h (fluctuates 34-68 as activity continues). Rows are real and demonstrable: `pip install --user tabulate==0.9.0` as WIN-WORKSTATION\amahmoud under powershell.exe; the same package as NT AUTHORITY\SYSTEM under cortex-xdr-payload.exe; `git.exe clone --depth 1 https://github.com/octocat/Hello-World.git C:\Users\amahmoud\Documents\koi-test-repo`; `uv pip install` inside WSL on thor; npm/npx on OfficeiMac. `installed_for_user` recovers the target account from `--target C:\Users\<name>\...` even when the process ran as SYSTEM — this is how you attribute a SYSTEM-context install to the
+
+
+_False positives:_ (a) This session's own automation: shell command lines that merely CONTAIN "pip install" or a github URL are themselves PROCESS events and match. Exclude SOAR/automation hosts or require action_process_image_name to be the real tool. (b) `npx ` matches tool invocations that install nothing (npx tsc --noEmit). (c) The parent chain for package managers that re-exec themselves (PyManager python.exe -
+
+
+### A2 — Supply-chain acquisition run by a non-interactive parent (SYSTEM/service/EDR vs. a human shell)
+
+**Purpose:** detection · **Status:** validated (24 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+Which package-manager installs were NOT launched by a human at a shell or IDE — i.e. came from a service, a scheduled task, an SSH/WinRM session, or a management/EDR automation payload?
+
+
+_Parameters:_ None required. The parent_class allow-list on the final filter is the tuning surface — add your own build agents to "developer IDE / agent" to suppress CI.
+
+
+```sql
+/* THEME A - Q2 : Supply-chain acquisition run by a NON-INTERACTIVE parent.
+   Purpose : detection
+   Dataset : xdr_data (PROCESS)
+   Idea    : the same `pip install` is benign from a developer's shell and suspicious from a
+             service, a scheduled task, an SSH daemon or an EDR/automation payload. Classify
+             the causality chain rather than the process itself.
+   Live ground truth on this tenant: the SAME package (tabulate 0.9.0) was installed twice -
+   once by WIN-WORKSTATION\amahmoud under powershell.exe, once by NT AUTHORITY\SYSTEM under
+   cortex-xdr-payload.exe -> cyserver.exe. This query separates them. */
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_command_line ~= "(?i)(pip3?\s+(install|download)|uv\s+(pip|add|tool)\s|npm\s+(i|install|add|ci)\s|npx\s|yarn\s+(add|install)|pnpm\s+(add|install)\s|git\s+clone|choco\s+install|winget\s+install|brew\s+install|Install-Module|Install-Package|go\s+install|cargo\s+install|gem\s+install)"
+// Build the full launcher chain: immediate parent + the causality (process-tree root) actor.
+// Classify on the causality (process-tree ROOT) actor, not the immediate parent: package
+// managers re-exec themselves (PyManager python.exe -> pythoncore python.exe), so the
+// immediate parent is often just the same binary again.
+| alter launcher = coalesce(causality_actor_process_image_name, actor_process_image_name)
+| alter parent_class = if(
+    launcher ~= "(?i)^(explorer\.exe|cmd\.exe|powershell\.exe|pwsh\.exe|WindowsTerminal\.exe|conhost\.exe|zsh|bash|sh|fish|Terminal|iTerm2|login)$", "interactive shell / desktop",
+    launcher ~= "(?i)^(Code\.exe|code|devenv\.exe|idea64\.exe|pycharm64\.exe|cursor|Cursor\.exe|claude|node)$", "developer IDE / agent",
+    launcher ~= "(?i)^(services\.exe|svchost\.exe|taskeng\.exe|taskhostw\.exe|schtasks\.exe|wininit\.exe|launchd|systemd|cron|crond)$", "service / scheduled task",
+    launcher ~= "(?i)^(sshd\.exe|sshd|winrshost\.exe|wsmprovhost\.exe|psexesvc\.exe|wsl\.exe)$", "remote session / lateral",
+    launcher ~= "(?i)(payload|cyserver|cortex|rtvd|osquery|BigFix|ccmexec|ansible|puppet|chef|salt)", "management / EDR automation",
+    "unclassified")
+| alter run_context = if(
+    action_process_username ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$" or action_process_username = "root",
+    "privileged / non-interactive", "user")
+// DETECTION CONDITION: keep only acquisitions that did NOT come from a human at a shell or IDE.
+| filter parent_class != "interactive shell / desktop" and parent_class != "developer IDE / agent"
+| fields _time, agent_hostname, agent_id, action_process_username, run_context, parent_class,
+         launcher, actor_process_command_line, causality_actor_process_image_name,
+         action_process_image_name, action_process_cwd, action_process_image_command_line,
+         action_process_causality_id
+| sort desc _time
+| limit 200
 ```
 
-2,264 queries were charged to this tenant on 2026-07-21 across four parallel agents. Reset is
-00:00 UTC. **Zero queries were re-executed in this pass**, so every row count below is the
-originating agent's, not mine. Each entry states its provenance explicitly.
 
-What *was* done instead is a static audit against the syntax facts the four agents verified
-independently, which found two queries that reference joined columns in a form another agent proved
-fails. Those are corrected here and moved to the pending appendix.
+_Interpretation:_ 24 rows over 24h, cleanly separated into two classes. "management / EDR automation" = the NT AUTHORITY\SYSTEM pip installs and git clone whose causality root is cyserver.exe via cortex-xdr-payload.exe — legitimate here (they are our own Live Terminal test payloads) but structurally identical to an attacker installing through a compromised management agent. "remote session / lateral" = installs on thor arriving through sshd.exe -> cmd.exe -> wsl.exe. The interactive pip install by WIN-WORKSTATION\amahmoud under powershell.exe is correctly EXCLUDED, which is the point: the same command, same pac
 
-### How to re-validate — one command, after 00:00 UTC
 
-```bash
-cd /Users/aymanmahmoud/Documents/Coding/KOI-MP/docs/xql
-python3 validate.py 24 A1.xql A2.xql A3.xql A4.xql A5.xql A6.xql A7.xql A8.xql \
-                       B1.xql B3.xql B5.xql B6.xql B10.xql B11.xql \
-                       C2.xql C3.xql C5.xql C6.xql D1.xql D1b.xql D2.xql D3.xql D3b.xql
-# MCP queries are bursty on this tenant - run these over 7d, not 24h:
-python3 validate.py 168 B0.xql B2.xql B7.xql B8.xql B9.xql
-```
+_False positives:_ On this tenant every hit is our own EDR-driven testing, so as written it would be noisy in any estate that provisions software via SCCM/Intune/Ansible. Tune by allow-listing your provisioning agent's exact image name AND its expected command-line shape, not just the image name — the whole value is that a compromised management agent still looks like the management agent.
 
-`validate.py` distinguishes a parse failure, an asynchronous run failure, a concurrency rejection
-and a quota rejection. The naive poller in `scripts/koi_tenant.py` waits only for `SUCCESS` and
-therefore **hangs forever on a failing query instead of reporting the error** — do not use it to
-validate.
 
-### Provenance labels used below
+### A3 — git clone in XDR joined to KOI's GitHub inventory event (repo + commit SHA + who cloned it)
 
-| Label | Meaning |
-|---|---|
-| `VALIDATED (agent), N rows` | Executed on this tenant by the originating agent, row count recorded. Not re-run in this pass. |
-| `VALIDATED (agent), row count lost` | The agent states it ran and parsed; the count did not survive into the curation brief. |
-| `CORRECTED — needs re-run` | A defect was found by static audit and fixed here. The fixed text has never been executed. |
-| `RECONSTRUCTED — needs re-run` | The originating agent's exact text was not persisted; rebuilt from its description. Never executed in this form. |
+**Purpose:** investigation · **Status:** validated (5 rows on this tenant) · **Datasets:** xdr_data (PROCESS) + koi_koi_raw (Audit, type=extensions, marketplace=github)
 
----
 
-## 2. What this pass changed
+For every git clone on the estate: did KOI inventory the repo, what commit SHA did it record, how long did KOI take to see it, who ran the clone and where did it land?
 
-**Dropped (3), all as duplicates:**
 
-| Dropped | Superseded by | Why |
-|---|---|---|
-| `B12` KOI-side agentic inventory | `B11` | Same dataset, same filter intent. B11 has a classifier and per-item aggregation; B12 is a bare `comp count() by marketplace, object_name, action`. |
-| `C1` broad `contains "Koi"` hunt | `C2` | C1 returns 15 ungrouped rows of the same thing C2 groups and counts. The originating agent labelled C1 orientation-only itself. |
-| `C4` KOI scan cadence | `C3` + `A7` | C4 differs from C3 only in grouping. Its `koi_launch_kind` classifier — the genuinely useful part — has been folded into C3, and its cadence finding is recorded in A7's interpretation. |
+_Parameters:_ None. Add `| filter koi_saw_it = "NO - not in KOI inventory"` to convert it into a coverage detection.
 
-**Corrected (3):**
 
-- **B8, B9** referenced joined columns as `koi.koi_risk`, `koi.koi_audit_events` etc. in `alter` and
-  `fields` clauses. Theme A verified by testing that after `| join (...) as koi`, joined columns must
-  be referenced by their **bare** name; the alias-prefixed form produces `unknown field koi.<x>` and
-  the query **fails asynchronously**, which is why a poller that only waits for `SUCCESS` never
-  surfaces it. Both queries were shipped unvalidated by their author, so this was never caught. The
-  alias prefix has been stripped from all body references (it is correct and required in the join
-  *condition*, which is unchanged).
-- **B7, B8** used `to_json_string(resources)` and the JSONPath form `$.0.type`. `resources` is
-  already a JSON string, so the wrapper double-encodes it and every `json_extract_scalar` silently
-  returns null. Separately, Theme D established by testing that array indexing must be written
-  `$[0].data.hostname`. Both normalised. This contradicts Theme B's claim that B7 validated —
-  resolve it by running B7 both ways after quota reset.
-- **A7** filtered on `action_process_image_path ~= "(?i)\\AppData\\Local\\Koi\\Python\\"`. Theme A's
-  own finding #1 is that `\\` in an XQL string literal reaches the regex engine as **one** literal
-  backslash — which makes this `\A` (start-of-text anchor), `\L`, `\K`, `\P`. Theme C independently
-  proved the working form is `"(?i)AppData.Local.Koi.Python"`, using `.` as a wildcard for the
-  separator, and got rows from it. A7 now uses the proven form.
-
-**Not recoverable (14):** Theme C queries C7–C13 and Theme D queries D4–D12 were described in the
-curation brief but their exact XQL was neither persisted to disk nor recoverable from the session
-transcript. Only truncated prose survives. They are **not included** — publishing query text I do not
-have would violate the rule that nothing ships unvalidated. Notably this loses **D7**, the worked
-Alerts-dedupe query that turns 734 raw rows into 3 real alerts; a reconstruction is offered in the
-appendix but is unvalidated.
-
----
-
-## 3. The Alerts duplication rule — audit result
-
-> The integration re-sends every still-open alert on every 1-minute fetch cycle. Over 24 hours,
-> 734 rows = **3 real alerts** (~245×). Every query touching `source_log_type = "Alerts"` must dedupe
-> on `json_extract_scalar(metadata, "$.notification_event_id")`. Never `count()` rows. Never `_id`.
-> `finding_info.uid` is the **policy** id (3 distinct across 1048 alerts), not an alert id.
-> `source_log_type = "Audit"` is **not** duplicated (1.0 ratio) and needs no dedupe.
-
-Every query whose text survives was checked. **Two touch Alerts — B7 and B8 — and both dedupe
-correctly** on `metadata.notification_event_id` before any aggregation. No violation found.
-
-That is a narrow result, not a clean bill of health: **9 of the surviving 29 queries could not be
-checked at all**, because Theme C's C7–C13 and Theme D's D4–D12 text is gone. Theme D's own brief
-says D7 does the dedupe correctly; Theme C's says none of its queries count Alerts rows. Both claims
-are unverifiable here. **Anyone recovering those queries must re-audit them against this rule before
-use.**
-
-Every other query in this library reads `source_log_type = "Audit"` only, or reads `xdr_data` only.
-
----
-
-## 4. Ranking principle
-
-The queries worth having are the ones **neither dataset can answer alone**. Ranked in tiers:
-
-1. **Cross-dataset.** `koi_koi_raw` joined or unioned with `xdr_data`. KOI knows *what you own and
-   what it scores as risky*; XDR knows *what actually ran, who ran it and what it talked to*. Only
-   the intersection tells you a risky thing is live.
-2. **XDR-only, answering a KOI question.** A7 measures KOI scan freshness purely from `xdr_data`,
-   because KOI on Windows is run-on-demand and *absence of KOI events is indistinguishable from "no
-   scan ran"* inside `koi_koi_raw`. That is a cross-product answer from one dataset.
-3. **XDR-only supply-chain / agentic telemetry.** Real detections, but they do not use the KOI pack.
-4. **KOI-only.** Genuinely useful — the Marketplace pack has no history command, no
-   `koi-devices-list` and no `Koi.Device.*` context, so these recover capability the API does not
-   expose. But they are not the point of this exercise and are ranked last deliberately.
-
----
-
-## 5. Tenant facts every query below depends on
-
-Stated once so the interpretations do not repeat them.
-
-- **Dual-covered hosts = exactly one: `win-workstation`.** `koi_koi_raw` Audit carries 35 distinct
-  hostnames over 7d; `xdr_data` carries 4 (`win-workstation`, `thor`, `OfficeiMac`,
-  `Abdelrahman's MacBook Air`). Everything else in `koi_koi_raw` (`sj-ad-2022`, `jumpbox`, `winkoi`,
-  `Greg's Mac mini`, `Kim的MacBook Air`, …) belongs to other orgs on the shared Koi SaaS tenant and
-  has no Cortex agent. **Every coverage-gap count from these queries is dominated by tenant-sharing,
-  not by real coverage failure. Say so in any report.**
-- **Hostname form is compatible.** Both datasets use bare hostnames (not FQDN), preserve case, and
-  both use the Unicode curly apostrophe U+2019 in Mac names. A plain equality join is correct.
-- **KOI Alerts cannot be attributed to a host via `hostname`** — it is NULL on every Alerts row
-  (797/7d). The host lives in `resources[type=device].data.hostname`. Only Audit rows are
-  host-attributable.
-- **The KOI agent is visible in XDR.** It bundles its own WinPython and runs as
-  `C:\Users\Default\AppData\Local\Koi\Python\WPy64-31290\python\python.exe -I C:\Windows\SystemTemp\tmpXXXX.tmp.pyz`,
-  spawned by `powershell.exe`. Each scan is a **pair**: a `.py` launcher, then ~90 ms later the
-  `.pyz` zipapp. On `win-workstation`, 49 launcher + 49 zipapp executions in 24h — a mean cadence of
-  ~29 minutes. This contradicts, or at least qualifies, "KOI is run-on-demand with no resident
-  agent": there is a real expected cadence to test absence against.
-- **`C:\ProgramData\Koi\` is not in XDR FILE telemetry.** Writes under `AppData\Local\Koi` are a
-  one-time 22-second WinPython unpack burst, not a per-scan artifact. **Process execution is the only
-  reliable KOI-freshness signal in XDR.** Do not build a freshness detection on file writes.
-- **KOI detection latency, measured:** pip installs on `win-workstation` were inventoried 4–135
-  minutes after the process ran; a `git clone` was inventoried 3 minutes after. This is what justifies
-  A5's 180-minute and A6's 240-minute windows.
-- **Marketplace vocabulary differs between events and the API.** Events emit short forms
-  (`software_windows`, `chrome`, `vsc`, `jet`, `npp`, `openvsx`, `software_mac`, `github`); the API
-  and UI use long forms (`windows`, `chrome_web_store`, `vscode`, `jetbrains`, `notepad++`,
-  `open_vsx_registry`, `mac`, `github_mcp_registry`). `npm` and `pypi` are the same in both.
-  `built_in` and `side_loaded` are **installation methods** leaking into the marketplace field, not
-  marketplaces. Never feed an event-side marketplace value into a `koi-*` command argument.
-- **`platform` is the better agentic pivot than `marketplace`.** It carries `claude_code`, `cur`
-  (Cursor), `openclaw`, `talon`, `git`, `homebrew`, `vsc`, `edge`, `chrome` — values `marketplace`
-  reports as null or as `built_in`.
-- **Lifecycle:** install and uninstall produce events with the *same* `(object_name, item_version)`.
-  Git repos use the remote as `object_name` and the **commit SHA** as `item_version`.
-
-### XQL syntax facts, established by testing
-
-Reuse these; they cost real debugging time.
-
-1. A backslash in an XQL string literal is written `\\` and reaches the regex engine as **one**
-   literal backslash. `\\\\` gives two and silently matches nothing. In several places the safest
-   form is `.` as a wildcard for the separator.
-2. `"NT AUTHORITY\\SYSTEM"` inside an `in (...)` list does **not** match — the literal is not
-   unescaped for equality. Use an anchored regex `~= "(?i)SYSTEM$"`.
-3. After `| join (...) as koi`, joined columns are referenced by their **bare** name (`koi_time`), not
-   `koi.koi_time`. The alias prefix is required in the join *condition* and forbidden everywhere
-   else. Getting it wrong fails the query **asynchronously**.
-4. `| fields alias = field` is a parse error. Alias in `alter`, then list in `fields`.
-5. Joined timestamps are of type `date`, so `subtract()` rejects them — use
-   `timestamp_diff(t1, t2, "MINUTE")`. `to_epoch(_time, "MINUTES")` is rejected; only `MILLIS` and
-   `SECONDS` are supported. Arithmetic inside `to_timestamp()` is a parse error.
-6. `event_sub_type` cannot be selected unless `event_type` is also in the projection.
-   `ENUM.FILE_WRITE / FILE_CREATE_NEW / FILE_RENAME` work.
-7. `action_country` is an **ENUM**. `to_string()` yields the ISO alpha-2 **code** (`"US"`, `"AE"`,
-   `"-"`), while `comp ... by action_country` **prints the label** (`"UNITED_STATES"`). Comparing
-   against the label silently matches nothing — this was a real bug caught mid-validation (79 rows →
-   12 after the fix).
-8. On **NETWORK** events `action_process_image_name` is always NULL. Process identity is
-   `actor_process_image_name`; the owning application is `causality_actor_process_image_name`.
-   `dns_query_name` is not populated (0 of 15,616 agent-owned NETWORK rows) — use
-   `action_external_hostname` (~56% populated).
-9. JSONPath array indexing is `$[0].data.hostname`. `$.[0]...` is rejected.
-   `json_extract_array(x, "$")` works; `json_extract_array(x, "$.[*]")` does not. Filter expressions
-   `$.[?(@.type=='device')]` are unsupported — use
-   `arrayfilter(arr, json_extract_scalar("@element","$.type") = "device")`.
-10. `dedup <keys> by desc _time` is the latest-row-per-key idiom, and is what makes both the Alerts
-    dedupe and the "current state" queries possible.
-11. Filter **order** matters on FILE: a broad `not(... contains ...)` exclusion placed *before* the
-    classifier makes the query time out. Put it after `filter secret_class != null`.
-12. The tenant enforces both a parallel-query cap and a daily Compute Unit quota. Both surface as
-    HTTP 500 with distinct `err_msg`.
-
-### A false-positive class worth naming once
-
-The analyst's own session is telemetry. This project's shell command lines — which contained the
-strings `github.com/octocat/Hello-World.git`, `pip install`, and the directory name `KOI-MP` — were
-themselves recorded as PROCESS events on `OfficeiMac` and matched A1, A3, C1 and C2. **Any
-command-line-substring detection will catch analysts and automation discussing the indicator.**
-Exclude your SOAR and automation hosts, or require the process image to be the actual tool.
-
----
-
-# Group 1 — Cross-dataset (`koi_koi_raw` × `xdr_data`)
-
-These are the queries that justify the exercise.
-
----
-
-## A3 — `git clone` in XDR joined to KOI's GitHub inventory event
-
-**Purpose:** investigation (becomes a coverage detection with one added filter)
-**Datasets:** `xdr_data` (PROCESS) + `koi_koi_raw` (Audit, `type=extensions`, `marketplace=github`)
-**Question:** For every `git clone` on the estate — did KOI inventory the repo, what commit SHA did
-it record, how long did KOI take to see it, who ran the clone, and where did it land?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** none. Add `| filter koi_saw_it = "NO - not in KOI inventory"` to convert it into a
-coverage detection.
-
-```
+```sql
 /* THEME A - Q3 : `git clone` in XDR joined to KOI's GitHub inventory event.
    Purpose : investigation
    Datasets: xdr_data (PROCESS) + koi_koi_raw (Audit)
@@ -296,124 +210,109 @@ dataset = xdr_data
 | limit 200
 ```
 
-**Interpretation.** This is the cleanest demonstration in the library of what the join buys you.
-KOI records `octocat/Hello-World` with `item_version = 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d` —
-the commit SHA — and nothing else. XDR records
-`"C:\Program Files\Git\cmd\git.exe" clone --depth 1 https://github.com/octocat/Hello-World.git C:\Users\amahmoud\Documents\koi-test-repo`
-running as `NT AUTHORITY\SYSTEM` under `cortex-xdr-payload.exe`, and never resolves a SHA. One row
-gives you repo, SHA, user, parent process, destination path and KOI's detection lag (3 minutes on
-this clone).
 
-Zero rows means no `git clone` in the window, not a broken query.
+_Interpretation:_ 5 rows over 48h and they tell the whole Theme-A story in one line each. XDR: `git.exe clone --depth 1 https://github.com/octocat/Hello-World.git C:\Users\amahmoud\Documents\koi-test-repo` as NT AUTHORITY\SYSTEM, causality root cyserver.exe. KOI 3 minutes later: octocat/Hello-World, action=installed, item_version=7fd1a60b01f91b314f59955a4e4d4e80d8edf11d — the COMMIT SHA, which XDR never resolves. Then a second KOI row 21 minutes after the clone: action=uninstalled, SAME name and SAME SHA (confirming the documented lifecycle behaviour). Neither product can produce this row alone: KOI has no idea
 
-**False positives.** The repo-slug regex matches any command line containing a GitHub URL, including
-an analyst's own shell history — see the named false-positive class in §5. `koi_saw_it = "NO"` is
-only meaningful on a dual-covered host; on this tenant that is `win-workstation` alone, and every
-other host will read as a false gap.
 
----
+_False positives:_ One of the five rows is a genuine false positive worth keeping visible: on OfficeiMac the repo URL appeared inside a /bin/zsh command line that was itself one of THESE validation queries — parent process "Claude", clone_dest garbage ("dest],"). Any command-line-substring rule catches analysts and automation talking about the indicator. Exclude automation hosts. Second FP class: clone_dest extracti
 
-## A6 — Package installed in XDR, never inventoried by KOI (coverage gap, XDR → KOI)
 
-**Purpose:** detection (KOI coverage / scan-freshness / evasion hunt)
-**Datasets:** `xdr_data` (PROCESS) + `koi_koi_raw` (Audit)
-**Question:** A package manager ran and installed something on a dual-covered host. Did KOI ever
-inventory the package?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** `// PARAM: window_minutes` — 240, forward-looking. Derived host set: the dual-covered
-population is computed by the inner join, **not hardcoded**.
+### A4 — Acquisition then run — installer/archive/script dropped to a user-writable path and executed from it
 
-```
-/* THEME A - Q6 : COVERAGE GAP, direction XDR -> KOI.
-   A package-manager install ran in XDR on a dual-covered host, and KOI never inventoried the
-   package.
-   Purpose : detection (KOI coverage / scan-freshness / evasion hunt)
-   Datasets: xdr_data (PROCESS) + koi_koi_raw (Audit)
+**Purpose:** detection · **Status:** validated (10 rows on this tenant) · **Datasets:** xdr_data (FILE joined to PROCESS)
 
-   ASSUMPTIONS:
-   1. Dual-covered hosts only; the set is derived from the data, not hardcoded.
-   2. KOI on Windows is run-on-demand, so the inventory event lands at the NEXT scan, not at
-      install time. The window is forward-looking and generous: 240 minutes. // PARAM: window_minutes
-      A hit inside a fresh window usually means "no scan has run yet" - re-run it after a scan
-      before treating it as a real gap. Pair it with A7 (scan freshness) to tell the two apart.
-   3. Package-name extraction is a heuristic: first non-flag, non-path token after
-      install/add/i. Command lines it cannot parse yield null and are dropped, so this
-      under-reports rather than over-reports.
-   5. nearest_koi_lag_minutes can be NEGATIVE: it is the closest KOI sighting of the same
-      package name on that host in either direction, which is useful context on a gap row.
-   4. Virtualenv / --target installs into a path KOI does not scan are the expected true
-      positives here, alongside anything installed into a container or WSL guest. */
+
+What was written to Downloads/Desktop/Temp as an installer, archive or script — and then executed from that exact path, by whom, with what parent?
+
+
+_Parameters:_ The path allow-list and the `servicing_selfextract` suppression are the tuning surfaces. `minutes_drop_to_exec >= 0` can be tightened (e.g. `<= 60`) for a stricter drop-and-run.
+
+
+```sql
+/* THEME A - Q4 : Acquisition then run - installer / archive / script written to a
+   user-writable path, and then EXECUTED from that same path.
+   Purpose : detection
+   Dataset : xdr_data (FILE joined to PROCESS)
+   Idea    : KOI will eventually inventory whatever the installer leaves behind, but only at
+             the next scan. The write-then-execute pair is the moment of acquisition and it is
+             visible in XDR immediately.
+   Live ground truth: chrome.exe wrote C:\Users\amahmoud\Downloads\Antigravity-x64.exe, which
+   was then run, and KOI reported "Antigravity 2.3.1" on win-workstation afterwards.
+   Join note: after `join ... as run`, joined columns are referenced by their BARE names. */
 dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-| filter action_process_image_command_line ~= "(?i)(pip3?\s+install|uv\s+pip\s+install|npm\s+(i|install|add)\s)"
-| alter pkg_name = lowercase(arrayindex(regextract(action_process_image_command_line,
-    "(?i)(?:pip3?|npm|uv\s+pip)\s+(?:install|add|i)\s+(?:(?:-{1,2}\S+|\S*[\\/:]\S*)\s+)*([A-Za-z@][A-Za-z0-9._@/-]{1,})"), 0))
-| filter pkg_name != null
-| alter ecosystem = if(action_process_image_command_line ~= "(?i)npm\s+(i|install|add)\s", "npm", "pypi")
-| alter proc_host = lowercase(agent_hostname),
-        install_time = _time,
-        install_user = action_process_username,
-        install_cmd  = action_process_image_command_line,
-        install_parent = coalesce(causality_actor_process_image_name, actor_process_image_name)
-| dedup proc_host, pkg_name, install_cmd by asc install_time
-| fields proc_host, agent_hostname, install_time, pkg_name, ecosystem, install_user,
-         install_parent, install_cmd
-// dual coverage only
+| filter event_type = ENUM.FILE
+| filter event_sub_type in (ENUM.FILE_WRITE, ENUM.FILE_CREATE_NEW, ENUM.FILE_RENAME)
+| filter action_file_extension in ("exe","msi","ps1","bat","cmd","sh","zip","7z","tar","gz","tgz","whl","vsix","crx","dmg","pkg","jar","nupkg","deb","rpm","py","js")
+// user-writable landing zones - where downloads and hand-dropped payloads live
+| filter action_file_path ~= "(?i)(\\Downloads\\|\\Desktop\\|\\AppData\\Local\\Temp\\|\\Windows\\Temp\\|\\Public\\|/Downloads/|/Desktop/|/tmp/|/var/tmp/)"
+| alter dropped_path   = lowercase(action_file_path),
+        dropped_name   = action_file_name,
+        drop_time      = _time,
+        drop_host      = lowercase(agent_hostname),
+        dropper        = actor_process_image_name,
+        dropper_cmd    = actor_process_command_line,
+        dropper_user   = actor_effective_username
+| alter dropper_class = if(
+    dropper ~= "(?i)^(chrome\.exe|msedge\.exe|firefox\.exe|brave\.exe|opera\.exe|Safari|Google Chrome|Arc)$", "browser download",
+    dropper ~= "(?i)^(curl(\.exe)?|wget|powershell\.exe|pwsh\.exe|bitsadmin\.exe|certutil\.exe|python(\.exe|3)?)$", "scripted download",
+    dropper ~= "(?i)^(Outlook\.exe|Teams\.exe|Slack|WhatsApp|Discord|Signal)$", "messaging / mail",
+    "other")
+| dedup drop_host, dropped_path by asc drop_time
+| fields drop_time, drop_host, agent_hostname, dropped_path, dropped_name,
+         action_file_extension, action_file_signature_status, dropper, dropper_class,
+         dropper_user, dropper_cmd
+// did anything then EXECUTE that exact path?
 | join type = inner (
-    dataset = koi_koi_raw
-    | filter source_log_type = "Audit"
-    | alter cov_host = lowercase(hostname)
-    | comp count() as koi_event_count by cov_host
-  ) as cov cov.cov_host = proc_host
-// did KOI ever inventory that package on that host?
-| join type = left (
-    dataset = koi_koi_raw
-    | filter source_log_type = "Audit" and type = "extensions"
-    | filter marketplace in ("pypi", "npm")
-    | alter koi_host = lowercase(hostname),
-            koi_pkg  = lowercase(object_name),
-            koi_time = _time,
-            koi_action = action,
-            koi_version = item_version,
-            koi_marketplace = marketplace
-    | fields koi_host, koi_pkg, koi_time, koi_action, koi_version, koi_marketplace
-  ) as k k.koi_pkg = pkg_name and k.koi_host = proc_host
-| alter koi_lag_minutes = timestamp_diff(koi_time, install_time, "MINUTE")
-| alter koi_confirmed = if(koi_time != null and koi_lag_minutes >= 0 and koi_lag_minutes <= 240, 1, 0)
-| comp max(koi_confirmed) as seen_by_koi,
-       min(koi_lag_minutes) as nearest_koi_lag_minutes
-    by proc_host, agent_hostname, install_time, pkg_name, ecosystem, install_user, install_parent, install_cmd
-| filter seen_by_koi = 0
-| fields install_time, agent_hostname, pkg_name, ecosystem, install_user, install_parent,
-         install_cmd, nearest_koi_lag_minutes
-| sort desc install_time
-| limit 200
+    dataset = xdr_data
+    | filter event_type = ENUM.PROCESS
+    | alter exec_path = lowercase(action_process_image_path),
+            exec_host = lowercase(agent_hostname),
+            exec_time = _time,
+            exec_user = action_process_username,
+            exec_cmd  = action_process_image_command_line,
+            exec_parent = coalesce(causality_actor_process_image_name, actor_process_image_name),
+            exec_sha256 = action_process_image_sha256,
+            exec_sig = action_process_signature_status
+    | fields exec_path, exec_host, exec_time, exec_user, exec_cmd, exec_parent, exec_sha256, exec_sig
+  ) as run run.exec_path = dropped_path and run.exec_host = drop_host
+| alter minutes_drop_to_exec = timestamp_diff(exec_time, drop_time, "MINUTE")
+// acquisition then run only counts if the run came AFTER the write
+| filter minutes_drop_to_exec >= 0
+/* TUNING - dominant false-positive class on Windows: OS servicing and installer
+   self-extraction (MoUsoCoreWorker/DismHost, VC_redist, *.tmp bootstrappers) drop and
+   immediately run their own payload inside C:\Windows\Temp as SYSTEM. Flagged rather than
+   silently dropped so it stays visible, then excluded for the detection. */
+| alter servicing_selfextract = if(
+    dropper_user ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$"
+      and dropped_path ~= "(?i)(\\windows\\temp\\|\\softwaredistribution\\|\\windows\\installer\\)",
+    "yes", "no")
+| filter servicing_selfextract = "no"
+| fields drop_time, agent_hostname, dropped_name, dropped_path, dropper, dropper_class,
+         dropper_user, minutes_drop_to_exec, exec_time, exec_user, exec_parent,
+         exec_sig, exec_sha256, exec_cmd
+| sort desc drop_time
+| limit 100
 ```
 
-**Interpretation.** The expected true positives are installs into a path KOI does not scan —
-`--target`, a virtualenv, a container, a WSL guest. Those are exactly the shape of a deliberate
-evasion and exactly the shape of a routine developer workflow, so this needs pairing with A7 before
-anything fires: a hit inside a fresh window usually means "no scan has run yet", not "KOI missed it".
-`nearest_koi_lag_minutes` can be **negative** — it is the closest KOI sighting of the same package
-name on that host in *either* direction, which is context on a gap row rather than an error.
 
-**False positives.** The package-name extraction is a heuristic (first non-flag, non-path token) and
-drops command lines it cannot parse, so the query **under-reports**. On a tenant where only one host
-is dual-covered, the inner join reduces the population to almost nothing — that is correct behaviour,
-not a bug, and it is why the dual-covered set is derived rather than hardcoded.
+_Interpretation:_ 10 rows over 7d after noise suppression (17 before). The clean signal is exactly the pattern Theme A is about: chrome.exe (dropper_class = "browser download") writes into C:\Users\<user>\Downloads\, and explorer.exe then executes it — i.e. the user double-clicked it. Confirmed instances: VSCodeUserSetup-x64-1.129.1.exe (0 min), ChatGPT Installer.exe (0 min), rc-astro-cli-1.1.0-windows-x64.exe on thor (1 min), PI-windows-x64-1.9.4.exe on thor (410 min — downloaded, then run nearly 7 hours later). Two of these close the loop with KOI: after VSCodeUserSetup ran, koi_koi_raw carries "Microsoft Vis
 
----
 
-## A5 — KOI reported an install, XDR saw no acquisition process (coverage gap, KOI → XDR)
+_False positives:_ The dominant FP class is named and suppressed in the query: Windows servicing and installer self-extraction (MoUsoCoreWorker -> DismHost.exe, VC_redist bootstrappers, *.tmp extractors) drop-and-run inside C:\Windows\Temp as SYSTEM within the same second. Surviving lower-grade noise: cleanmgr.exe extracting DismHost.exe into the USER's AppData\Local\Temp — same binary, user context, so the SYSTEM-b
 
-**Purpose:** detection (coverage / evasion hunt)
-**Datasets:** `koi_koi_raw` (Audit) + `xdr_data` (PROCESS)
-**Question:** KOI inventoried something new on a dual-covered host. Did *any* package manager or
-downloader run near that time that names it?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** `// PARAM: window_minutes` — 180, backward-looking.
 
-```
+### A5 — Coverage gap KOI→XDR: a KOI install event with no corresponding acquisition process in XDR
+
+**Purpose:** detection · **Status:** validated (15 rows on this tenant) · **Datasets:** koi_koi_raw (Audit, type=extensions) + xdr_data (PROCESS)
+
+
+Which items did KOI report as installed/updated on a dual-covered host without XDR ever seeing a package manager or installer run for them in the preceding window?
+
+
+_Parameters:_ // PARAM: window_minutes — 180 as written (lag_minutes >= 0 and <= 180). The dual-covered host set is derived by the inner join, deliberately not hardcoded.
+
+
+```sql
 /* THEME A - Q5 : COVERAGE GAP, direction KOI -> XDR.
    A KOI "installed"/"updated" inventory event on a dual-covered host with NO package-manager
    or download process in XDR anywhere near it.
@@ -477,31 +376,167 @@ dataset = koi_koi_raw
 | limit 200
 ```
 
-**Interpretation.** A hit means something arrived on disk without a package manager running — a file
-copy, an archive unpack, a sync client, a hand-dropped MSI, or an installer XDR did not see spawn a
-process. That is the interesting half of the coverage question and it is unanswerable from either
-dataset alone.
 
-**False positives.** Two structural ones, both stated in the query header. (1) **KOI's first scan of a
-host reports every pre-existing item as `installed`.** Those legitimately have no XDR process and will
-flood this query — exclude the first scan per host, or run over a window starting after onboarding.
-(2) The `item_root` heuristic reduces `"Antigravity 2.3.1"` to `antigravity` because KOI names Windows
-software `NAME + VERSION`, which never appears verbatim in a command line; short or generic roots will
-match unrelated command lines and *suppress* real gaps.
+_Interpretation:_ 15 rows over 48h, all on win-workstation, and they are TRUE positives in the useful sense — they are precisely the items that do NOT arrive via a package manager and therefore have no process to catch: Chrome/Edge extensions ("Dark Reader" 4.9.129, "JSON Formatter" 0.10.2, "Bookmarks Quick Search", "Google Docs Offline") and VS Code extensions (ms-toolsai.jupyter, ms-toolsai.vscode-jupyter-slideshow). These are installed by the browser/IDE itself writing into a profile directory — no child process spawns, so XDR PROCESS telemetry is structurally blind to them. That is the honest, valuable find
 
----
 
-## A8 — One-item acquisition timeline (the playbook query)
+_False positives:_ (1) The first KOI scan of any host reports every pre-existing item as "installed" — those all appear as gaps. Run this over a window that starts after onboarding, or exclude the earliest koi_time per host. (2) item_root is a leading-token heuristic: short or generic leading tokens ("python", "java", "node") will over-corroborate and hide real gaps; multi-word names whose first token is not in the 
 
-**Purpose:** investigation
-**Datasets:** `koi_koi_raw` (Audit) + `xdr_data` (PROCESS, FILE), unioned into a common shape
-**Question:** Given one item and one host, put every KOI lifecycle event and every XDR process and
-file event that names it on a single timeline.
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** `// PARAM: item_token`, `// PARAM: hostname` — both appear three times each (once per
-union branch). The worked values `"win-workstation"` / `"tabulate"` are placeholders.
 
+### A6 — Coverage gap XDR→KOI: a package-manager install in XDR that KOI never inventoried
+
+**Purpose:** detection · **Status:** validated (0 rows on this tenant) · **Datasets:** xdr_data (PROCESS) + koi_koi_raw (Audit, type=extensions, marketplace in pypi/npm)
+
+
+Which pip/npm/uv installs did XDR observe on a dual-covered host that KOI never reported as an inventory item?
+
+
+_Parameters:_ // PARAM: window_minutes — 240 as written (koi_lag_minutes >= 0 and <= 240). Dual-covered host set derived by the inner join.
+
+
+```sql
+/* THEME A - Q6 : COVERAGE GAP, direction XDR -> KOI.
+   A package-manager install ran in XDR on a dual-covered host, and KOI never inventoried the
+   package.
+   Purpose : detection (KOI coverage / scan-freshness / evasion hunt)
+   Datasets: xdr_data (PROCESS) + koi_koi_raw (Audit)
+
+   ASSUMPTIONS:
+   1. Dual-covered hosts only; the set is derived from the data, not hardcoded.
+   2. KOI on Windows is run-on-demand, so the inventory event lands at the NEXT scan, not at
+      install time. The window is forward-looking and generous: 240 minutes. // PARAM: window_minutes
+      A hit inside a fresh window usually means "no scan has run yet" - re-run it after a scan
+      before treating it as a real gap. Pair it with A8 (scan freshness) to tell the two apart.
+   3. Package-name extraction is a heuristic: first non-flag, non-path token after
+      install/add/i. Command lines it cannot parse yield null and are dropped, so this
+      under-reports rather than over-reports.
+   5. nearest_koi_lag_minutes can be NEGATIVE: it is the closest KOI sighting of the same
+      package name on that host in either direction, which is useful context on a gap row.
+   4. Virtualenv / --target installs into a path KOI does not scan are the expected true
+      positives here, alongside anything installed into a container or WSL guest. */
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_command_line ~= "(?i)(pip3?\s+install|uv\s+pip\s+install|npm\s+(i|install|add)\s)"
+| alter pkg_name = lowercase(arrayindex(regextract(action_process_image_command_line,
+    "(?i)(?:pip3?|npm|uv\s+pip)\s+(?:install|add|i)\s+(?:(?:-{1,2}\S+|\S*[\\/:]\S*)\s+)*([A-Za-z@][A-Za-z0-9._@/-]{1,})"), 0))
+| filter pkg_name != null
+| alter ecosystem = if(action_process_image_command_line ~= "(?i)npm\s+(i|install|add)\s", "npm", "pypi")
+| alter proc_host = lowercase(agent_hostname),
+        install_time = _time,
+        install_user = action_process_username,
+        install_cmd  = action_process_image_command_line,
+        install_parent = coalesce(causality_actor_process_image_name, actor_process_image_name)
+| dedup proc_host, pkg_name, install_cmd by asc install_time
+| fields proc_host, agent_hostname, install_time, pkg_name, ecosystem, install_user,
+         install_parent, install_cmd
+// dual coverage only
+| join type = inner (
+    dataset = koi_koi_raw
+    | filter source_log_type = "Audit"
+    | alter cov_host = lowercase(hostname)
+    | comp count() as koi_event_count by cov_host
+  ) as cov cov.cov_host = proc_host
+// did KOI ever inventory that package on that host?
+| join type = left (
+    dataset = koi_koi_raw
+    | filter source_log_type = "Audit" and type = "extensions"
+    | filter marketplace in ("pypi", "npm")
+    | alter koi_host = lowercase(hostname),
+            koi_pkg  = lowercase(object_name),
+            koi_time = _time,
+            koi_action = action,
+            koi_version = item_version,
+            koi_marketplace = marketplace
+    | fields koi_host, koi_pkg, koi_time, koi_action, koi_version, koi_marketplace
+  ) as k k.koi_pkg = pkg_name and k.koi_host = proc_host
+| alter koi_lag_minutes = timestamp_diff(koi_time, install_time, "MINUTE")
+| alter koi_confirmed = if(koi_time != null and koi_lag_minutes >= 0 and koi_lag_minutes <= 240, 1, 0)
+| comp max(koi_confirmed) as seen_by_koi,
+       min(koi_lag_minutes) as nearest_koi_lag_minutes
+    by proc_host, agent_hostname, install_time, pkg_name, ecosystem, install_user, install_parent, install_cmd
+| filter seen_by_koi = 0
+| fields install_time, agent_hostname, pkg_name, ecosystem, install_user, install_parent,
+         install_cmd, nearest_koi_lag_minutes
+| sort desc install_time
+| limit 200
 ```
+
+
+_Interpretation:_ ZERO rows — and this is a legitimately quiet, correct detection, not a broken query. Verified by re-running the identical query with the final `| filter seen_by_koi = 0` removed: the population is 16 rows and EVERY ONE has seen_by_koi = 1. That is a positive result about KOI: every parseable pip install on the dual-covered host was inventoried, with measured lag of 5, 4, 134 and 135 minutes (tabulate x2, inflection x2, both as WIN-WORKSTATION\amahmoud and as NT AUTHORITY\SYSTEM). Those measured lags are what justify the 240-minute window — it is derived from this tenant's observed KOI scan cad
+
+
+_False positives:_ The dominant FP is TIMING, not logic: a real install that simply has not been scanned yet looks identical to a coverage gap. Always pair with A7 (scan freshness) — if minutes_since_last_scan exceeds the install age, the correct verdict is "no scan yet", not "gap". Second: package-name extraction is a first-non-flag-token heuristic; shell-quoted specs ('astropy-healpix>=1.0') and deeply nested wsl/
+
+
+### A7 — KOI scan freshness measured from XDR — how much can you trust this host's KOI inventory?
+
+**Purpose:** both · **Status:** validated (1 rows on this tenant) · **Datasets:** xdr_data (PROCESS) only — deliberately no KOI data
+
+
+When did the KOI agent last actually run on each host, and is that host's KOI inventory fresh, aging or stale?
+
+
+_Parameters:_ The freshness thresholds (60 / 1440 minutes) are the tuning surface. Add `| filter minutes_since_last_scan > 1440` to make it a pure detection.
+
+
+```sql
+/* THEME A - Q7 : KOI SCAN FRESHNESS measured from XDR, not from KOI.
+   Purpose : detection (coverage assurance) + investigation (is this host's inventory stale?)
+   Dataset : xdr_data (PROCESS) only - no KOI data needed, which is the point.
+   Why     : KOI on Windows is run-on-demand; there is no resident agent, so ABSENCE of KOI
+             events means "no scan ran", not "nothing happened". You cannot tell those apart
+             from koi_koi_raw. But the KOI agent bundles its own Python and executes as
+             C:\Users\Default\AppData\Local\Koi\Python\WPy64-*\python\python.exe -I <tmp>.pyz
+             spawned by powershell.exe - which XDR records. So XDR can tell you WHEN a host was
+             last scanned, and therefore how much to trust its KOI inventory.
+   Verified on this tenant: win-workstation, scans at 09:45:22, 09:51:15 and 10:00:10 line up
+   exactly with the manually triggered scans.
+   Use as a detection by filtering minutes_since_last_scan above your tolerance. */
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+// The KOI-bundled interpreter. Anchored on the vendor's own install path so it cannot be
+// confused with any other Python on the box.
+| filter action_process_image_path ~= "(?i)\\AppData\\Local\\Koi\\Python\\"
+| alter scan_host   = lowercase(agent_hostname),
+        scan_time   = _time,
+        koi_payload = arrayindex(regextract(action_process_image_command_line, "(?i)(tmp[0-9A-Fa-f]+\.tmp\.pyz?)"), 0),
+        launched_by = actor_process_image_name,
+        scan_user   = action_process_username
+// one row per scan invocation - each scan spawns a .py bootstrap and a .pyz payload
+| comp count() as koi_processes,
+       max(scan_time) as last_scan,
+       min(scan_time) as first_scan
+    by scan_host, agent_hostname, launched_by, scan_user
+| alter minutes_since_last_scan = timestamp_diff(current_time(), last_scan, "MINUTE")
+| alter inventory_confidence = if(
+    minutes_since_last_scan <= 60,   "fresh - inventory reflects the last hour",
+    minutes_since_last_scan <= 1440, "aging - up to a day of drift",
+    "STALE - KOI inventory for this host may be days out of date")
+| fields agent_hostname, launched_by, scan_user, koi_processes, first_scan, last_scan,
+         minutes_since_last_scan, inventory_confidence
+| sort asc minutes_since_last_scan
+| limit 100
+```
+
+
+_Interpretation:_ 1 row over 7d: win-workstation, launched_by = powershell.exe, scan_user = NT AUTHORITY\SYSTEM, 180 KOI-agent processes across the window, minutes_since_last_scan = 84, inventory_confidence = "aging". This is the query neither dataset can produce alone and it is the one that makes A5 and A6 trustworthy — without it, "KOI never reported this package" and "KOI has not scanned since before the install" are indistinguishable. It works because the KOI agent ships its own interpreter at C:\Users\Default\AppData\Local\Koi\Python\WPy64-31290\python\python.exe and executes a .pyz payload from C:\Windows
+
+
+_False positives:_ Essentially none — the filter is anchored on the vendor's own install path, so it cannot collide with any other Python. My first attempt used a loose regex (paths OR command lines containing "Koi"/"koi.security") and immediately picked up 20 unrelated processes including this session's own shell; the tightened path anchor eliminated all of them. Caveats: (a) Windows-only — the macOS/Linux KOI agen
+
+
+### A8 — Single-item acquisition timeline — the playbook query (KOI + XDR process + XDR file, unioned)
+
+**Purpose:** investigation · **Status:** validated (56 rows on this tenant) · **Datasets:** koi_koi_raw (Audit) + xdr_data (PROCESS) + xdr_data (FILE), unioned into a common shape
+
+
+For one item on one host: show every KOI lifecycle event and every XDR process and file event that names it, on a single ordered timeline.
+
+
+_Parameters:_ // PARAM: item_token — lower-case substring of the KOI object_name ("tabulate", "octocat/hello-world", "antigravity", "vscodeusersetup"). Appears in 3 places. // PARAM: hostname — appears in 3 places. Both are currently bound to "tabulate" / "win-workstation" as a working example.
+
+
+```sql
 /* THEME A - Q8 : ONE-ITEM ACQUISITION TIMELINE - the playbook query.
    Purpose : investigation. Parameterise on an item and a host and get every KOI lifecycle
              event and every XDR process/file event that names it, on one timeline.
@@ -553,392 +588,109 @@ dataset = koi_koi_raw
 | limit 300
 ```
 
-**Interpretation.** This is the one to wire into a playbook. The union avoids the join entirely, which
-sidesteps the bare-name/alias-prefix trap and the `date`-typed-timestamp arithmetic trap in one move.
-`source` tells the analyst which product saw each line, so KOI's scan latency shows up as a visible
-gap in the timeline rather than having to be computed.
 
-**False positives.** Substring matching on `item_token`. Short or generic tokens (`pip`, `build`,
-`access`, `npm`) will match unrelated paths and command lines; use the longest distinctive fragment
-available. Compare with **D2**, which does the XDR half only but adds LOAD_IMAGE.
+_Interpretation:_ 56 rows over 48h for item_token="tabulate" on win-workstation, verified to contain all three sources (46 XDR file, 8 XDR process, 2 KOI inventory — checked by swapping the tail for `| comp count() as n by source`). The timeline reads end to end: the pip install command line with its parent and cwd, then every file python.exe wrote into C:\Users\amahmoud\AppData\Roaming\Python\Python314\site-packages\tabulate-0.9.0.dist-info\ (RECORD, WHEEL, INSTALLER, entry_points.txt, top_level.txt) — i.e. the on-disk proof of what landed — then KOI's installed and uninstalled inventory rows. This is the shap
+
+
+_False positives:_ Substring matching on a short item_token will over-match (a token like "json" or "code" hits thousands of paths). Prefer a distinctive token, and be aware the FILE branch is the noisy one — it returns every file of the package, not just the install marker. For very common tokens, restrict the FILE branch to dist-info/node_modules markers or drop it. As with A1/A3, an analyst or automation host dis
+
 
 ---
 
-## A7 — KOI scan freshness, measured from XDR rather than from KOI
+## Theme B — Agentic runtime
 
-**Purpose:** detection (coverage assurance) + investigation (is this host's inventory stale?)
-**Datasets:** `xdr_data` (PROCESS) only — **and that is the point**
-**Question:** When was each host last scanned by KOI, and therefore how much should its KOI inventory
-be trusted?
-**Provenance:** `CORRECTED — needs re-run`. Validated by Theme A in its original form; the path regex
-has been replaced with the form Theme C independently proved returns rows (see §2).
-**Parameters:** `// PARAM: staleness thresholds` (60 / 1440 minutes).
+_AI agents and MCP servers actually executing, their egress, and KOI-flagged risk that is also running. The agentic-supply-chain core._
 
-```
-/* THEME A - Q7 : KOI SCAN FRESHNESS measured from XDR, not from KOI.
-   Purpose : detection (coverage assurance) + investigation (is this host's inventory stale?)
-   Dataset : xdr_data (PROCESS) only - no KOI data needed, which is the point.
-   Why     : KOI on Windows is run-on-demand; there is no resident agent, so ABSENCE of KOI
-             events means "no scan ran", not "nothing happened". You cannot tell those apart
-             from koi_koi_raw. But the KOI agent bundles its own Python and executes as
-             C:\Users\Default\AppData\Local\Koi\Python\WPy64-*\python\python.exe -I <tmp>.pyz
-             spawned by powershell.exe - which XDR records. So XDR can tell you WHEN a host was
-             last scanned, and therefore how much to trust its KOI inventory.
-   Verified on this tenant: win-workstation, scans at 09:45:22, 09:51:15 and 10:00:10 line up
-   exactly with the manually triggered scans.
-   Use as a detection by filtering minutes_since_last_scan above your tolerance. */
+_12 queries._
+
+
+### B0 — Ground truth: which agent-ish process image names actually exist
+
+**Purpose:** investigation · **Status:** validated (7 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+_Parameters:_ none — deliberately hardcoded name list; edit the list, not a variable
+
+
+```sql
+// Theme B / B0 - Ground truth probe: which agent-ish PROCESS IMAGE NAMES actually exist here.
+// Run this before anything else. Every other Theme B query is tuned to what this returns;
+// guessing at agent binary names produces a library of queries that are all quiet.
 dataset = xdr_data
 | filter event_type = ENUM.PROCESS
-// The KOI-bundled interpreter. Anchored on the vendor's own install path so it cannot be
-// confused with any other Python on the box. The `.` are wildcards standing in for the
-// path separator - see the string-literal backslash caveat in the syntax notes.
-| filter action_process_image_path ~= "(?i)AppData.Local.Koi.Python"
-| alter scan_host   = lowercase(agent_hostname),
-        scan_time   = _time,
-        koi_payload = arrayindex(regextract(action_process_image_command_line, "(?i)(tmp[0-9A-Fa-f]+\.tmp\.pyz?)"), 0),
-        launched_by = actor_process_image_name,
-        scan_user   = action_process_username
-// one row per scan invocation - each scan spawns a .py bootstrap and a .pyz payload
-| comp count() as koi_processes,
-       max(scan_time) as last_scan,
-       min(scan_time) as first_scan
-    by scan_host, agent_hostname, launched_by, scan_user
-| alter minutes_since_last_scan = timestamp_diff(current_time(), last_scan, "MINUTE")
-| alter inventory_confidence = if(
-    // PARAM: staleness thresholds, in minutes. 60/1440 suits a ~29-minute scan cadence.
-    minutes_since_last_scan <= 60,   "fresh - inventory reflects the last hour",
-    minutes_since_last_scan <= 1440, "aging - up to a day of drift",
-    "STALE - KOI inventory for this host may be days out of date")
-| fields agent_hostname, launched_by, scan_user, koi_processes, first_scan, last_scan,
-         minutes_since_last_scan, inventory_confidence
-| sort asc minutes_since_last_scan
-| limit 100
+| alter pname = lowercase(action_process_image_name)
+| filter pname in ("node","node.exe","npx","npx.cmd","bun","deno","uv","uvx","uvx.exe","python","python.exe","python3","Python","claude","cursor","code","code.exe","ollama","copilot","codex","windsurf","antigravity")
+   or pname contains "claude" or pname contains "cursor" or pname contains "copilot"
+   or pname contains "ollama" or pname contains "codex" or pname contains "windsurf"
+   or pname contains "antigravity" or pname contains "node" or pname contains "npx"
+   or pname contains "uvx" or pname contains "aider" or pname contains "gemini"
+| comp count() as n by agent_hostname, action_process_image_name
+| sort desc n
 ```
 
-**Interpretation.** This is the query that makes A5 and A6 usable. Without it, "KOI has no record of
-this package" is ambiguous between *KOI missed it* and *KOI has not looked yet*, and there is nothing
-in `koi_koi_raw` that can tell you which. Because the KOI agent bundles its own Python and executes
-under a vendor-specific path, XDR can date the last scan of every dual-covered host.
 
-Measured cadence on `win-workstation`: 49 launcher + 49 zipapp executions in 24h, spanning
-2026-07-20 10:41:34Z → 2026-07-21 10:00:10Z — a mean gap of ~29 minutes and a perfect 49/49 pairing.
-So absence can be tested against a real expected cadence, not just against manual triggers.
+_Interpretation:_ VALIDATED, 24h window, 7 rows. Returned: Python 2826 (OfficeiMac), claude 180 (OfficeiMac), python.exe 112 (win-workstation), Code.exe 10, Antigravity.exe 7, Antigravity-x64.exe 1 (all win-workstation), mscopilot.exe 1 (thor). Two lessons this query teaches: (1) `node` returns ZERO over 24h but 288 spawns over 7d — MCP activity here is bursty, so any MCP query must run over 7d not 24h; (2) `ollama app.exe` on thor does NOT appear at all, because Ollama is a long-running service whose process start fell outside the window — it is only discoverable via NETWORK (B4) and FILE (B6). A PROCESS-name-
 
-**A host absent from this result set has never run a KOI scan in the window.** That is the coverage
-blind spot, and on this tenant it is 3 of the 4 XDR-covered hosts — but see §5: that number is
-dominated by the fact that the other KOI hosts belong to different orgs on a shared SaaS tenant.
 
-**False positives.** Essentially none — the `AppData\Local\Koi\Python\WPy64-*\python\python.exe` path
-anchor is KOI's own bundled WinPython and matched nothing else on the tenant. `current_time()` is used
-here; Theme C could not validate it before quota exhaustion, so re-confirm it on the re-run.
+_False positives:_ Broad `contains` matching pulls in unrelated binaries on other estates (anything named *-node*, *-code*). Acceptable here because this is a discovery probe, not a detection.
 
----
 
-## D2 — XDR runtime evidence for a KOI item
+### B1 — Agentic runtime inventory by causality group owner
 
-**Purpose:** investigation
-**Datasets:** `xdr_data` (PROCESS, FILE, LOAD_IMAGE)
-**Question:** KOI says this item is installed — did anything from it actually execute, get loaded as a
-module, or get written to disk, and what brought it here?
-**Provenance:** `VALIDATED (agent), 8 rows` (24h)
-**Parameters:** `// PARAM: item_token` (lowercase), `// PARAM: koi_host` (delete the line to search
-fleet-wide).
+**Purpose:** investigation · **Status:** validated (24 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
 
-```
-// Theme D / D2 - XDR runtime evidence for a KOI item.
-// Bridges "KOI says it is installed" to "it actually ran / loaded / was written to disk".
-// action_module_path is confirmed present on LOAD_IMAGE (action_module_file_name is NOT);
-// coalescing the three path fields into one artifact_path lets a single filter cover
-// execution, module load and file write.
-// PARAM: item_token = a distinctive LOWERCASE substring of the item - package name,
-//                     extension id, repo name. From KoiContext.package_name / item_id.
-// PARAM: koi_host   = KoiContext.alert_hostname / Koi.Inventory.Endpoint.hostname.
-//                     Delete that filter line to search fleet-wide.
-// Investigation.
-dataset = xdr_data
-| filter event_type in (ENUM.PROCESS, ENUM.FILE, ENUM.LOAD_IMAGE)
-| filter agent_hostname = "win-workstation"                          // PARAM: koi_host
-| alter artifact_path = coalesce(action_process_image_path, action_file_path, action_module_path)
-| alter cmdline       = action_process_image_command_line
-| filter lowercase(coalesce(artifact_path, "")) contains "hello-world"
-      or lowercase(coalesce(cmdline, ""))       contains "hello-world"     // PARAM: item_token
-| alter evidence_kind = if(event_type = ENUM.PROCESS, "executed",
-                        if(event_type = ENUM.LOAD_IMAGE, "loaded_as_module", "written_to_disk"))
-| fields _time, agent_hostname, evidence_kind, event_type, artifact_path, cmdline,
-         action_process_image_name, action_process_username, action_process_signature_status,
-         actor_process_image_name, actor_process_command_line
-| sort asc _time
-| limit 200
-```
 
-**Interpretation.** The lighter, playbook-shaped counterpart to A8: it drops the KOI half but adds
-LOAD_IMAGE, so it catches an item that is loaded as a DLL or interpreter module without ever being a
-process of its own. On the worked example it recovered the full causality chain for
-`octocat/Hello-World` — `cortex-xdr-payload.exe` → `git.exe clone` → `git remote-https` →
-`git-remote-https.exe` — four minutes before KOI reported the install. **That four-minute gap is the
-KOI scan latency made visible.**
+_Parameters:_ none; extend the agent_family classifier as new agents appear
 
-**False positives.** Substring matching, same caveat as A8. A hit in `cmdline` only, with no matching
-`artifact_path`, means something *mentioned* the item rather than ran it — the `git clone` rows are
-exactly that shape and are still the answer you want, so read `evidence_kind` together with who the
-actor was.
 
----
-
-# Group 2 — XDR-only: supply-chain acquisition
-
-Real detections, but they do not touch the KOI pack.
-
----
-
-## A1 — Package-manager and downloader execution with full acquisition provenance
-
-**Purpose:** investigation (detection when scoped by tool or `run_context`)
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** For every supply-chain acquisition command on the estate — which tool, which user, which
-parent, which working directory, and the full command line?
-**Provenance:** `VALIDATED (agent), 46 rows` (24h; fluctuates 34–68 as activity continues)
-**Parameters:** none. Scope with `| filter agent_hostname = "..."` or
-`| filter acquisition_tool = "pip"` to turn it into a detection.
-
-```
-/* THEME A - Q1 : Package-manager / downloader execution with full acquisition provenance.
-   Purpose        : investigation (and detection when scoped by tool or run_context)
-   Datasets       : xdr_data (PROCESS)
-   What it answers: for every supply-chain acquisition command on the estate - which tool,
-                    which user, which parent process, which working directory, full command line.
-   Tools matched were confirmed present on this tenant: pip, uv, npm/npx, git, curl,
-   Invoke-WebRequest. yarn/pnpm/choco/winget/brew/go/cargo/gem are included so the query
-   travels to estates that have them; they are simply quiet here. */
+```sql
+// Theme B / B1 - Agentic runtime inventory: which AI-agent / coding-agent software is
+// actually EXECUTING in the estate. Run this first; it defines the surface every other
+// Theme B detection is tuned against.
 dataset = xdr_data
 | filter event_type = ENUM.PROCESS
-// Match on the command line, not the image name: pip and npm are usually reached through
-// python.exe -m pip, cmd /c, wsl.exe or a shell, so image-name matching misses most of them.
-| filter action_process_image_command_line ~= "(?i)(pip3?\s+(install|download)|uv\s+(pip|add|tool)\s|npm\s+(i|install|add|ci)\s|npx\s|yarn\s+(add|install)|pnpm\s+(add|install|i)\s|git\s+clone|curl\s+[^|]*http|wget\s+http|choco\s+install|winget\s+install|brew\s+install|Invoke-WebRequest|Install-Module|Install-Package|go\s+install|cargo\s+install|gem\s+install)"
-| alter acquisition_tool = if(
-    action_process_image_command_line ~= "(?i)uv\s+(pip|add|tool)\s", "uv",
-    action_process_image_command_line ~= "(?i)pip3?\s+(install|download)", "pip",
-    action_process_image_command_line ~= "(?i)(npm\s+(i|install|add|ci)\s|npx\s)", "npm",
-    action_process_image_command_line ~= "(?i)yarn\s+(add|install)", "yarn",
-    action_process_image_command_line ~= "(?i)pnpm\s+(add|install|i)\s", "pnpm",
-    action_process_image_command_line ~= "(?i)git\s+clone", "git",
-    action_process_image_command_line ~= "(?i)brew\s+install", "brew",
-    action_process_image_command_line ~= "(?i)choco\s+install", "choco",
-    action_process_image_command_line ~= "(?i)winget\s+install", "winget",
-    action_process_image_command_line ~= "(?i)(Install-Module|Install-Package)", "psgallery",
-    action_process_image_command_line ~= "(?i)go\s+install", "go",
-    action_process_image_command_line ~= "(?i)cargo\s+install", "cargo",
-    action_process_image_command_line ~= "(?i)gem\s+install", "gem",
-    "http-download")
-// Who really ran it. Anchored suffix match - "NT AUTHORITY\SYSTEM" cannot be matched with
-// an `in` list because XQL does not unescape the backslash inside a string literal.
-| alter run_context = if(
-    action_process_username ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$" or action_process_username = "root",
-    "non-interactive / service context", "interactive user")
-| alter installed_for_user = arrayindex(regextract(action_process_image_command_line, "(?i)[Cc]:\\Users\\([A-Za-z0-9._-]+)"), 0)
-| fields _time, agent_hostname, agent_id, acquisition_tool, run_context,
-         action_process_username, installed_for_user,
-         action_process_image_name, action_process_cwd,
-         action_process_image_command_line,
-         actor_process_image_name, actor_process_command_line,
-         causality_actor_process_image_name,
-         action_process_image_sha256, action_process_causality_id
-| sort desc _time
-| limit 500
+| alter
+    proc = lowercase(coalesce(action_process_image_name, "")),
+    root = lowercase(coalesce(causality_actor_process_image_name, "")),
+    cmd  = lowercase(coalesce(action_process_image_command_line, ""))
+// Classify by the CAUSALITY GROUP OWNER (the root of the tree), not the leaf: an MCP
+// server is a bare `node`/`python`, and only the CGO says which agent owns it.
+| alter agent_family = if(
+      root contains "claude"      or proc contains "claude",      "claude",
+      root contains "cursor"      or proc contains "cursor",      "cursor",
+      root contains "antigravity" or proc contains "antigravity", "antigravity",
+      root contains "windsurf"    or proc contains "windsurf",    "windsurf",
+      root contains "copilot"     or proc contains "copilot",     "copilot",
+      root contains "codex"       or proc contains "codex",       "codex",
+      root contains "ollama"      or proc contains "ollama",      "ollama",
+      root contains "code"        or proc contains "code",        "vscode_family",
+      cmd contains "mcp",                                         "mcp_unattributed",
+      null)
+| filter agent_family != null
+| comp count() as events,
+       count_distinct(action_process_image_name) as distinct_child_images,
+       min(_time) as first_seen,
+       max(_time) as last_seen
+   by agent_hostname, agent_family, causality_actor_process_image_name
+| sort desc events
 ```
 
-**Interpretation.** `installed_for_user` recovers the target account from `--target C:\Users\<name>\...`
-even when the process ran as SYSTEM — that is how you attribute a SYSTEM-context install to the human
-it was done for. Package managers actually present on this tenant: **pip, uv, npm/npx, git, curl,
-Invoke-WebRequest, msiexec**. Not present anywhere in 7d: yarn, pnpm, choco, winget, brew, go, cargo,
-gem — they are kept in the query so it travels, and are legitimately quiet here.
 
-**False positives.** (a) The analyst's own session — see §5. (b) `npx ` matches tool invocations that
-install nothing (`npx tsc --noEmit`). (c) For package managers that re-exec themselves (PyManager
-`python.exe` → pythoncore `python.exe`) the parent chain shows the same binary twice — use
-`causality_actor_process_image_name` for the true origin.
+_Interpretation:_ VALIDATED, 24h window, 24 rows. Top: OfficeiMac/Code 17,552 events (6 distinct child images); OfficeiMac/Claude 15,398 events (24 distinct child images) — that 24-vs-6 gap is the signal: Claude Desktop is not just an editor, it drives two dozen distinct executables. win-workstation shows Antigravity.exe (17 events) and a VSCodeUserSetup-x64-1.129.1.exe installer tree (57 events, 12 distinct children — an agentic IDE being installed inside the window). thor shows mscopilot.exe. Zero rows would mean no AI tooling runs in the estate, which for any modern developer population is far more likely to
 
----
 
-## A2 — Supply-chain acquisition run by a non-interactive parent
+_False positives:_ `proc contains "code"` over-matches: `Microsoft Update Assistant` (12 events) and `com.adobe.acc.installer.v2` (3 events) were classified vscode_family because a child process name contained "code". Tighten to `root = "code" or root = "code.exe" or root contains "vscode"` if precision matters more than recall.
 
-**Purpose:** detection
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Which package-manager installs were *not* launched by a human at a shell or IDE?
-**Provenance:** `VALIDATED (agent), 24 rows` (24h)
-**Parameters:** none required. The `parent_class` allow-list on the final filter is the tuning
-surface — add your build agents to `"developer IDE / agent"` to suppress CI.
 
-```
-/* THEME A - Q2 : Supply-chain acquisition run by a NON-INTERACTIVE parent.
-   Purpose : detection
-   Dataset : xdr_data (PROCESS)
-   Idea    : the same `pip install` is benign from a developer's shell and suspicious from a
-             service, a scheduled task, an SSH daemon or an EDR/automation payload. Classify
-             the causality chain rather than the process itself.
-   Live ground truth on this tenant: the SAME package (tabulate 0.9.0) was installed twice -
-   once by WIN-WORKSTATION\amahmoud under powershell.exe, once by NT AUTHORITY\SYSTEM under
-   cortex-xdr-payload.exe -> cyserver.exe. This query separates them. */
-dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-| filter action_process_image_command_line ~= "(?i)(pip3?\s+(install|download)|uv\s+(pip|add|tool)\s|npm\s+(i|install|add|ci)\s|npx\s|yarn\s+(add|install)|pnpm\s+(add|install)\s|git\s+clone|choco\s+install|winget\s+install|brew\s+install|Install-Module|Install-Package|go\s+install|cargo\s+install|gem\s+install)"
-// Build the full launcher chain: immediate parent + the causality (process-tree root) actor.
-// Classify on the causality (process-tree ROOT) actor, not the immediate parent: package
-// managers re-exec themselves (PyManager python.exe -> pythoncore python.exe), so the
-// immediate parent is often just the same binary again.
-| alter launcher = coalesce(causality_actor_process_image_name, actor_process_image_name)
-| alter parent_class = if(
-    launcher ~= "(?i)^(explorer\.exe|cmd\.exe|powershell\.exe|pwsh\.exe|WindowsTerminal\.exe|conhost\.exe|zsh|bash|sh|fish|Terminal|iTerm2|login)$", "interactive shell / desktop",
-    launcher ~= "(?i)^(Code\.exe|code|devenv\.exe|idea64\.exe|pycharm64\.exe|cursor|Cursor\.exe|claude|node)$", "developer IDE / agent",
-    launcher ~= "(?i)^(services\.exe|svchost\.exe|taskeng\.exe|taskhostw\.exe|schtasks\.exe|wininit\.exe|launchd|systemd|cron|crond)$", "service / scheduled task",
-    launcher ~= "(?i)^(sshd\.exe|sshd|winrshost\.exe|wsmprovhost\.exe|psexesvc\.exe|wsl\.exe)$", "remote session / lateral",
-    launcher ~= "(?i)(payload|cyserver|cortex|rtvd|osquery|BigFix|ccmexec|ansible|puppet|chef|salt)", "management / EDR automation",
-    "unclassified")
-| alter run_context = if(
-    action_process_username ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$" or action_process_username = "root",
-    "privileged / non-interactive", "user")
-// DETECTION CONDITION: keep only acquisitions that did NOT come from a human at a shell or IDE.
-| filter parent_class != "interactive shell / desktop" and parent_class != "developer IDE / agent"
-| fields _time, agent_hostname, agent_id, action_process_username, run_context, parent_class,
-         launcher, actor_process_command_line, causality_actor_process_image_name,
-         action_process_image_name, action_process_cwd, action_process_image_command_line,
-         action_process_causality_id
-| sort desc _time
-| limit 200
-```
+### B2 — MCP server execution via the stdio spawn chain
 
-**Interpretation.** The same command, same package, same host, different provenance, different
-verdict. On this tenant the 24 rows split cleanly: `"management / EDR automation"` (the SYSTEM pip
-installs and `git clone` whose causality root is `cyserver.exe` via `cortex-xdr-payload.exe`) and
-`"remote session / lateral"` (installs on `thor` arriving through `sshd.exe` → `cmd.exe` → `wsl.exe`).
-The interactive `pip install` by `WIN-WORKSTATION\amahmoud` under `powershell.exe` is correctly
-excluded, which is the entire point. Classifying on the causality **root** rather than the immediate
-parent is essential — before that change the SYSTEM install classified as `"unclassified"` because its
-immediate parent was another `python.exe`.
+**Purpose:** both · **Status:** validated (8 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
 
-**False positives.** On this tenant every hit is the team's own EDR-driven testing, so as written it
-would be noisy in any estate that provisions software via SCCM, Intune or Ansible. Tune by
-allow-listing your provisioning agent's exact image name **and its expected command-line shape**, not
-just the image name — the whole value is that a compromised management agent still looks like the
-management agent.
 
-Pairs with **B10**, which is the exact complement: B10 keeps *only* what A2 excludes on the
-IDE/agent side.
+_Parameters:_ none; run over 7d not 24h (see interpretation)
 
----
 
-## A4 — Write then execute: installer or script dropped in a user-writable path and run from it
-
-**Purpose:** detection
-**Datasets:** `xdr_data` (FILE joined to PROCESS)
-**Question:** What was written into a download/temp/desktop path and then executed from that exact
-path, and how long between the two?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** none. The `servicing_selfextract` classifier is the tuning surface.
-
-```
-/* THEME A - Q4 : Acquisition then run - installer / archive / script written to a
-   user-writable path, and then EXECUTED from that same path.
-   Purpose : detection
-   Dataset : xdr_data (FILE joined to PROCESS)
-   Idea    : KOI will eventually inventory whatever the installer leaves behind, but only at
-             the next scan. The write-then-execute pair is the moment of acquisition and it is
-             visible in XDR immediately.
-   Live ground truth: chrome.exe wrote C:\Users\amahmoud\Downloads\Antigravity-x64.exe, which
-   was then run, and KOI reported "Antigravity 2.3.1" on win-workstation afterwards.
-   Join note: after `join ... as run`, joined columns are referenced by their BARE names. */
-dataset = xdr_data
-| filter event_type = ENUM.FILE
-| filter event_sub_type in (ENUM.FILE_WRITE, ENUM.FILE_CREATE_NEW, ENUM.FILE_RENAME)
-| filter action_file_extension in ("exe","msi","ps1","bat","cmd","sh","zip","7z","tar","gz","tgz","whl","vsix","crx","dmg","pkg","jar","nupkg","deb","rpm","py","js")
-// user-writable landing zones - where downloads and hand-dropped payloads live
-| filter action_file_path ~= "(?i)(\\Downloads\\|\\Desktop\\|\\AppData\\Local\\Temp\\|\\Windows\\Temp\\|\\Public\\|/Downloads/|/Desktop/|/tmp/|/var/tmp/)"
-| alter dropped_path   = lowercase(action_file_path),
-        dropped_name   = action_file_name,
-        drop_time      = _time,
-        drop_host      = lowercase(agent_hostname),
-        dropper        = actor_process_image_name,
-        dropper_cmd    = actor_process_command_line,
-        dropper_user   = actor_effective_username
-| alter dropper_class = if(
-    dropper ~= "(?i)^(chrome\.exe|msedge\.exe|firefox\.exe|brave\.exe|opera\.exe|Safari|Google Chrome|Arc)$", "browser download",
-    dropper ~= "(?i)^(curl(\.exe)?|wget|powershell\.exe|pwsh\.exe|bitsadmin\.exe|certutil\.exe|python(\.exe|3)?)$", "scripted download",
-    dropper ~= "(?i)^(Outlook\.exe|Teams\.exe|Slack|WhatsApp|Discord|Signal)$", "messaging / mail",
-    "other")
-| dedup drop_host, dropped_path by asc drop_time
-| fields drop_time, drop_host, agent_hostname, dropped_path, dropped_name,
-         action_file_extension, action_file_signature_status, dropper, dropper_class,
-         dropper_user, dropper_cmd
-// did anything then EXECUTE that exact path?
-| join type = inner (
-    dataset = xdr_data
-    | filter event_type = ENUM.PROCESS
-    | alter exec_path = lowercase(action_process_image_path),
-            exec_host = lowercase(agent_hostname),
-            exec_time = _time,
-            exec_user = action_process_username,
-            exec_cmd  = action_process_image_command_line,
-            exec_parent = coalesce(causality_actor_process_image_name, actor_process_image_name),
-            exec_sha256 = action_process_image_sha256,
-            exec_sig = action_process_signature_status
-    | fields exec_path, exec_host, exec_time, exec_user, exec_cmd, exec_parent, exec_sha256, exec_sig
-  ) as run run.exec_path = dropped_path and run.exec_host = drop_host
-// acquisition then run only counts if the run came AFTER the write
-| alter minutes_drop_to_exec = timestamp_diff(exec_time, drop_time, "MINUTE")
-// acquisition then run only counts if the run came AFTER the write
-| filter minutes_drop_to_exec >= 0
-/* TUNING - dominant false-positive class on Windows: OS servicing and installer
-   self-extraction (MoUsoCoreWorker/DismHost, VC_redist, *.tmp bootstrappers) drop and
-   immediately run their own payload inside C:\Windows\Temp as SYSTEM. Flagged rather than
-   silently dropped so it stays visible, then excluded for the detection. */
-| alter servicing_selfextract = if(
-    dropper_user ~= "(?i)(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$"
-      and dropped_path ~= "(?i)(\\windows\\temp\\|\\softwaredistribution\\|\\windows\\installer\\)",
-    "yes", "no")
-| filter servicing_selfextract = "no"
-| fields drop_time, agent_hostname, dropped_name, dropped_path, dropper, dropper_class,
-         dropper_user, minutes_drop_to_exec, exec_time, exec_user, exec_parent,
-         exec_sig, exec_sha256, exec_cmd
-| sort desc drop_time
-| limit 100
-```
-
-**Interpretation.** KOI will eventually inventory whatever the installer leaves behind, but only at
-the next scan. The write-then-execute pair is the *moment* of acquisition and is visible in XDR
-immediately. Ground truth on this tenant: `chrome.exe` wrote
-`C:\Users\amahmoud\Downloads\Antigravity-x64.exe`, it was then run, and KOI reported
-`Antigravity 2.3.1` on `win-workstation` afterwards.
-
-**False positives.** Named and handled in the query: Windows OS servicing and installer
-self-extraction (MoUsoCoreWorker/DismHost, VC_redist, `*.tmp` bootstrappers) drop and immediately run
-their own payload inside `C:\Windows\Temp` as SYSTEM. The `servicing_selfextract` column flags them
-rather than silently dropping them, so the class stays visible while being excluded from the
-detection.
-
-> **Caveat, flagged not fixed.** Both path regexes here use the `\\Downloads\\` form. Per syntax fact
-> #1 that reaches the regex engine as `\D` `ownloads` `\|`, where `\D` is "non-digit" — so the
-> expression may match far more loosely than intended, or differently on the two `filter` lines. The
-> originating agent reports the query parsed and returned rows, and it was not re-run in this pass.
-> **Confirm the match set on the re-run; if it is wrong, convert to the `.`-wildcard form used in
-> A7/C3.**
-
----
-
-# Group 3 — XDR-only: agentic runtime
-
-AI agents, MCP servers, and what they actually do. None of these touch the KOI pack.
-
----
-
-## B2 — MCP server execution via the stdio spawn chain
-
-**Purpose:** detection + investigation
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Which MCP servers are actually running, under which AI client, on which host?
-**Provenance:** `VALIDATED (agent), 8 rows` over **7d**, zero false positives
-**Parameters:** none — but **run over 7d, not 24h** (see interpretation).
-
-```
+```sql
 // Theme B / B2 - MCP server execution (stdio transport).
 // A local MCP server has no service of its own: the AI client spawns it as a CHILD process.
 // So the signal is a generic runtime (node / npx / python / uv / docker) whose command line
@@ -976,37 +728,154 @@ dataset = xdr_data
 | sort desc spawns
 ```
 
-**Interpretation.** `causality_actor_process_image_name` is the field that makes MCP detection possible
-at all: an MCP server is a bare `node` or `python`, and only the causality group owner says which agent
-owns it. Observed chain: `Claude` → `claude` → `env` → `node @playwright/mcp`.
 
-Real servers found on this tenant: `@playwright/mcp@latest` (256 `node` spawns + 16 `env` spawns,
-owner `claude`, `OfficeiMac`); the same server resolved through the npx cache as
-`.../node_modules/.bin/playwright-mcp`; and `start-mcp-server` run through `uvx` → `uv` → `python3.12`.
-The same logical server appears under **both** `env` and `node` because macOS spawns
-`/usr/bin/env node <entrypoint>` — **count distinct entrypoints, not rows.**
+_Interpretation:_ VALIDATED, 7d window, 8 rows, zero false positives. Real MCP servers found: `@playwright/mcp@latest` (256 node spawns + 16 env spawns, agent_owner=claude, OfficeiMac); the same server resolved through the npx cache as `.../node_modules/.bin/playwright-mcp` (16+16); and `start-mcp-server` run through the uv toolchain (uvx 3 → uv 3 → python 15 → python3.12 3). Note the same logical server appears under BOTH `env` and `node` because macOS spawns `/usr/bin/env node <entrypoint>` — count distinct entrypoints, not rows. Over a 24h window this query returns ZERO: MCP spawns on this tenant are bursty 
 
-**Over 24h this query returns zero.** MCP spawns here are bursty and the most recent burst was ~4 days
-old. Zero rows on a 24h window means "no agent session ran today", **not** that the query is wrong.
 
-**False positives.** Before the package-boundary regex was added, this returned 25 rows including
-`resmcp` (a python script arg), `mcp_type` (a column name in an analyst's own query), a base64 blob,
-and a YAML filename containing `_mcp_server`. The `[/@\-]mcp([\-/@\s"']|$)` clause plus excluding
-shells from the runner list removed all of them. **Do not relax either clause.** Remaining risk: a
-legitimately-named non-MCP package like `some-mcp-utils` would still match.
+_False positives:_ Before the package-boundary regex was added, this query returned 25 rows including `resmcp` (a python script arg), `mcp_type` (a column name in an analyst's own query), a base64 blob, and a YAML filename containing `_mcp_server`. The `[/@\-]mcp([\-/@\s"']|$)` clause plus excluding shells from the runner list removed all of them. Do NOT relax either clause. Remaining risk: a legitimately-named non-
 
----
 
-## B6 — An AI agent or one of its MCP servers touching a secret store
+### B3 — Full child-process tree of one AI agent on one host
 
-**Purpose:** detection
-**Datasets:** `xdr_data` (FILE)
-**Question:** Did anything inside an agent's process tree read or write `~/.ssh`, `.aws`, a
-kubeconfig, an `.npmrc`, a browser profile or a `.env`?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** none. The `secret_class` classifier is the tuning surface.
+**Purpose:** investigation · **Status:** parse-confirmed (heavy join — run with a narrow window) · **Datasets:** xdr_data (PROCESS)
 
+
+_Parameters:_ PARAM: agent_hostname; PARAM: causality_actor_process_image_name (the agent application)
+
+
+```sql
+// Theme B / B3 - Full child-process tree of one AI agent on one host.
+// Playbook-facing: given a host (and optionally a specific agent app) this reconstructs
+// everything the agent caused to run - MCP servers, shells, package managers, git, curl.
+// Investigation.
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+// PARAM: hostname
+| filter agent_hostname = "OfficeiMac"
+// PARAM: agent application (the causality group owner). Widen or drop to see all agents.
+| filter causality_actor_process_image_name in ("Claude", "Cursor", "Code", "Antigravity.exe",
+                                                "Windsurf.exe", "ollama app.exe")
+| alter cmd = coalesce(action_process_image_command_line, "")
+| alter activity = if(
+      lowercase(cmd) ~= "[/@\-]mcp([\-/@\s\"']|$)" or lowercase(cmd) ~= "mcp-server", "mcp_server",
+      action_process_image_name in ("npm", "npx", "pip", "pip3", "uv", "uvx", "yarn", "pnpm",
+                                    "brew", "gem", "cargo", "go"),                     "package_manager",
+      action_process_image_name in ("zsh", "bash", "sh", "cmd.exe", "powershell.exe"),  "shell",
+      action_process_image_name in ("curl", "wget", "git", "gh", "ssh", "scp"),         "network_tool",
+      action_process_image_name in ("node", "python", "python3", "python3.12", "Python"), "interpreter",
+                                                                                        "other")
+| comp count() as executions,
+       count_distinct(action_process_image_command_line) as distinct_cmdlines,
+       min(_time) as first_seen,
+       max(_time) as last_seen
+   by causality_actor_process_image_name, activity, actor_process_image_name,
+      action_process_image_name, action_process_username
+| sort desc executions
 ```
+
+
+_False positives:_ The `mcp_server` bucket will over-fire relative to B2 because it does not exclude shells — an analyst's own shell command mentioning an MCP package will land there. That is acceptable in an investigation view where you want to see everything, but do not reuse this classifier for a detection.
+
+
+### B4 — Network egress attributed to an AI agent's process tree
+
+**Purpose:** investigation · **Status:** validated (53 rows on this tenant) · **Datasets:** xdr_data (NETWORK)
+
+
+_Parameters:_ none; add agent names to the root filter as needed
+
+
+```sql
+// Theme B / B4 - Network egress attributed to an AI agent's process tree.
+// NOTE ON FIELDS (verified on this tenant): on NETWORK events action_process_image_name is
+// ALWAYS NULL - the process identity is actor_process_image_name, and the owning application
+// is causality_actor_process_image_name. dns_query_name is NOT populated here (0 of 15616
+// agent-owned NETWORK rows), so DNS-name pivots are unavailable; use action_external_hostname.
+// Detection (unexpected country / port) + Investigation (per-host egress profile).
+dataset = xdr_data
+| filter event_type = ENUM.NETWORK
+| alter root = lowercase(coalesce(causality_actor_process_image_name, ""))
+| filter root contains "claude" or root contains "cursor" or root contains "antigravity"
+      or root contains "windsurf" or root contains "ollama" or root contains "copilot"
+      or root = "code" or root = "code.exe"
+| filter action_network_is_loopback = false or action_network_is_loopback = null
+| alter dest = coalesce(action_external_hostname, action_remote_ip)
+| comp count() as flows,
+       count_distinct(action_remote_ip) as distinct_ips,
+       min(_time) as first_seen,
+       max(_time) as last_seen
+   by agent_hostname, causality_actor_process_image_name, actor_process_image_name,
+      action_country, action_remote_port, dest
+| sort desc flows
+```
+
+
+_Interpretation:_ VALIDATED, 24h window, 53 rows. This is the per-host agent egress profile you baseline against. Notables: Claude on OfficeiMac generated 6,427 DNS flows and 42 flows on port 22 (SSH) from the `claude` binary to 192.168.20.231 — an AI agent opening SSH sessions to an internal host is exactly the behaviour worth knowing about. `Code` reached 169.254.169.254 (the cloud instance-metadata address) on port 80. thor surfaced `ollama app.exe` here (32 DNS flows) even though it never appeared in the PROCESS inventory — proof that a resident model runtime must be hunted in NETWORK, not PROCESS. win-work
+
+
+_False positives:_ Volume is dominated by DNS (port 53) to the local resolver — 6,427 of Claude's rows and 11,481 of Code's. Filter `action_remote_port != 53` for a usable egress picture. `action_external_hostname` is only populated on ~56% of rows, so `dest` falls back to a bare IP more than half the time.
+
+
+### B5 — Anomalous egress from an AI agent or its MCP servers
+
+**Purpose:** detection · **Status:** validated (12 rows on this tenant) · **Datasets:** xdr_data (NETWORK)
+
+
+_Parameters:_ PARAM: approved country list (ISO alpha-2) in the `approved_country` alter; PARAM: web port list in `web_port`
+
+
+```sql
+// Theme B / B5 - Anomalous egress from an AI agent or its MCP servers.
+// An agent talking to its own model API is normal. The detection is an agent-owned process
+// reaching the public internet on a NON-WEB port, or to a country outside the approved set -
+// the shape a rogue MCP server or a prompt-injection-driven exfil attempt takes.
+// Detection.
+dataset = xdr_data
+| filter event_type = ENUM.NETWORK
+| alter root = lowercase(coalesce(causality_actor_process_image_name, ""))
+| filter root contains "claude" or root contains "cursor" or root contains "antigravity"
+      or root contains "windsurf" or root contains "ollama" or root contains "copilot"
+      or root contains "codex" or root = "code" or root = "code.exe"
+// public destinations only - drop loopback, RFC1918 and link-local
+| filter action_network_is_loopback = false or action_network_is_loopback = null
+| filter action_remote_ip != null
+| filter not (incidr(action_remote_ip, "10.0.0.0/8") or incidr(action_remote_ip, "172.16.0.0/12")
+           or incidr(action_remote_ip, "192.168.0.0/16") or incidr(action_remote_ip, "127.0.0.0/8")
+           or incidr(action_remote_ip, "169.254.0.0/16"))
+// action_country is an ENUM column. It must be cast before any string comparison, and
+// to_string() yields the ISO-3166 ALPHA-2 CODE ("US"), not the label ("UNITED_STATES") that
+// `comp ... by action_country` prints. Comparing against the label silently matches nothing.
+// "-" is the code this tenant emits for an unresolved/private destination.
+| alter country = to_string(action_country)
+// PARAM: approved egress countries for AI/agent traffic (ISO alpha-2)
+| alter approved_country = if(country in ("US", "IE", "GB", "NL"), true, false)
+| alter web_port = if(action_remote_port in (80, 443, 8443), true, false)
+| filter approved_country = false or web_port = false
+| alter reason = if(approved_country = false and web_port = false, "off_country_and_off_port",
+                    approved_country = false,                      "unapproved_country",
+                                                                   "non_web_port")
+| comp count() as flows, min(_time) as first_seen, max(_time) as last_seen
+   by agent_hostname, causality_actor_process_image_name, actor_process_image_name,
+      country, action_remote_ip, action_remote_port, action_external_hostname, reason
+| sort desc flows
+```
+
+
+_Interpretation:_ VALIDATED, 24h window, 12 rows — tight enough to alert on. Highest-value hit: `Claude Helper (Plugin)` on OfficeiMac reaching `desktopcommander.app` (172.67.192.165 and 104.21.11.210, 68 flows combined) — that is an MCP server's own vendor domain being contacted by an agent plugin process, i.e. an MCP server phoning home, which is precisely what this query exists to surface. Also: `ollama app.exe` on thor → github.com via an AE-geolocated edge (46 flows); Claude → api.github.com via AE (838 flows); `Code` → otel.gitkraken.com on port 4318 (OTLP telemetry, flagged `non_web_port`) and proxy.indi
+
+
+_False positives:_ CDN/anycast geolocation drives most of the `unapproved_country` hits: api.github.com resolving to a UAE edge node is not an anomaly, it is Azure Front Door. Tune by allowlisting `action_external_hostname` for known-good vendor domains rather than by widening the country list. Country `"-"` means unresolved and will always be 'unapproved' — decide explicitly whether to treat it as suspicious or exc
+
+
+### B6 — AI agent or MCP server touching a credential store
+
+**Purpose:** detection · **Status:** validated (100 rows on this tenant) · **Datasets:** xdr_data (FILE)
+
+
+_Parameters:_ none; extend the secret_class classifier for site-specific secret paths
+
+
+```sql
 // Theme B / B6 - An AI agent or one of its MCP servers touching a secret store.
 // This is the concrete harm behind "agentic runtime risk": an MCP server runs with the full
 // privilege of the user who started it, so a poisoned tool or an injected prompt reads
@@ -1045,149 +914,174 @@ dataset = xdr_data
 | sort desc events
 ```
 
-**Interpretation.** This is the concrete harm behind the phrase "agentic runtime risk". An MCP server
-runs with the full privilege of the user who started it, so a poisoned tool or an injected prompt
-reads `~/.ssh`, `.env`, cloud tokens or a browser profile with no further exploitation needed.
 
-Two structural notes worth keeping: the agent-tree filter **must come first** (an unscoped FILE scan is
-~115k rows/day on one host alone and the aggregation will not return), and the broad exclusion clause
-must come **after** `filter secret_class != null` or the query times out.
+_Interpretation:_ VALIDATED, 24h window, 100 rows (the API result page cap — the true count is higher). Real hits: `Code` → /Library/Keychains/System.keychain (87 events, os_credential_store); `Code` → /Users/aymanmahmoud/Documents/Coding/KOI-MP/.env (3 events, dotenv — confirmed in a separate probe); `Python` running under the Claude CGO → ~/.config/gcloud/access_tokens.db-journal (2 events, gcp_credentials); `Claude Helper` → Claude's own Cookies store (204 events); `ollama app.exe` on thor → C:\Users\ayman\.ollama\id_ed25519 (24 events, ssh_key — Ollama's own signing key, benign but correctly classified). `a
 
-**False positives.** High by design — `p contains "token"` and `p contains "credentials"` will match
-ordinary project files, and a coding agent legitimately reads `.env` files in the repo it is working
-in. Treat this as a hunt surface, not an alert, until you have baselined which `secret_class` values
-are normal for your agent population.
 
----
+_False positives:_ Substantial and predictable: an agentic IDE that BUNDLES an MCP server writes thousands of documentation files during install whose names contain 'credential' and 'token'. On win-workstation, Antigravity-x64.exe unpacking `chrome-devtools-mcp` produced dozens of rows like `...\node_modules\chrome-devtools-mcp\build\src\third_party\issue-descriptions\corsAllowCredentialsRequired.md`. Fix by appendi
 
-## B5 — Anomalous egress from an AI agent or its MCP servers
 
-**Purpose:** detection
-**Datasets:** `xdr_data` (NETWORK)
-**Question:** Which agent-owned processes reached the public internet on a non-web port, or to a
-country outside the approved set?
-**Provenance:** `VALIDATED (agent), row count lost` (79 rows → 12 after the `action_country` ENUM fix)
-**Parameters:** `// PARAM: approved egress countries` — `("US", "IE", "GB", "NL")` is tenant-specific
-and must be set per estate.
+### B7 — KOI MCP server inventory, deduplicated, with risk verdict
 
-```
-// Theme B / B5 - Anomalous egress from an AI agent or its MCP servers.
-// An agent talking to its own model API is normal. The detection is an agent-owned process
-// reaching the public internet on a NON-WEB port, or to a country outside the approved set -
-// the shape a rogue MCP server or a prompt-injection-driven exfil attempt takes.
-// Detection.
-dataset = xdr_data
-| filter event_type = ENUM.NETWORK
-| alter root = lowercase(coalesce(causality_actor_process_image_name, ""))
-| filter root contains "claude" or root contains "cursor" or root contains "antigravity"
-      or root contains "windsurf" or root contains "ollama" or root contains "copilot"
-      or root contains "codex" or root = "code" or root = "code.exe"
-// public destinations only - drop loopback, RFC1918 and link-local
-| filter action_network_is_loopback = false or action_network_is_loopback = null
-| filter action_remote_ip != null
-| filter not (incidr(action_remote_ip, "10.0.0.0/8") or incidr(action_remote_ip, "172.16.0.0/12")
-           or incidr(action_remote_ip, "192.168.0.0/16") or incidr(action_remote_ip, "127.0.0.0/8")
-           or incidr(action_remote_ip, "169.254.0.0/16"))
-// action_country is an ENUM column. It must be cast before any string comparison, and
-// to_string() yields the ISO-3166 ALPHA-2 CODE ("US"), not the label ("UNITED_STATES") that
-// `comp ... by action_country` prints. Comparing against the label silently matches nothing.
-// "-" is the code this tenant emits for an unresolved/private destination.
-| alter country = to_string(action_country)
-// PARAM: approved egress countries for AI/agent traffic (ISO alpha-2)
-| alter approved_country = if(country in ("US", "IE", "GB", "NL"), true, false)
-| alter web_port = if(action_remote_port in (80, 443, 8443), true, false)
-| filter approved_country = false or web_port = false
-| alter reason = if(approved_country = false and web_port = false, "off_country_and_off_port",
-                    approved_country = false,                      "unapproved_country",
-                                                                   "non_web_port")
-| comp count() as flows, min(_time) as first_seen, max(_time) as last_seen
-   by agent_hostname, causality_actor_process_image_name, actor_process_image_name,
-      country, action_remote_ip, action_remote_port, action_external_hostname, reason
-| sort desc flows
+**Purpose:** investigation · **Status:** validated (2 rows on this tenant) · **Datasets:** koi_koi_raw (source_log_type = "Alerts", resources[0].type = "mcp")
+
+
+_Parameters:_ PARAM: the trailing `limit` (validated at 2, shipped at 200)
+
+
+```sql
+// Theme B / B7 - KOI's MCP server inventory, deduplicated, with its risk verdict.
+// KOI does not ship MCP servers as their own event type. They arrive as an `mcp` RESOURCE
+// inside an OCSF-ish alert: resources[0] is the MCP server, resources[1] is the device.
+// CRITICAL: the integration re-sends every still-open alert on each 1-minute fetch cycle
+// (~245x duplication over 24h). Dedupe on metadata.notification_event_id - never count()
+// rows, never dedupe on _id. finding_info.uid is the POLICY id, not an alert id.
+// Investigation.
+dataset = koi_koi_raw
+| filter source_log_type = "Alerts"
+| alter res = to_json_string(resources)
+| filter json_extract_scalar(res, "$.0.type") = "mcp"
+| alter evid = json_extract_scalar(metadata, "$.notification_event_id")
+| dedup evid
+| fields evid, message, risk_level, severity, res
+| limit 200
 ```
 
-**Interpretation.** An agent talking to its own model API is normal. The detection is an agent-owned
-process reaching the public internet on a **non-web port** or to an **unapproved country** — the shape
-a rogue MCP server or a prompt-injection-driven exfiltration attempt takes.
 
-**The `action_country` ENUM trap is the load-bearing detail here** (syntax fact #7): comparing against
-the printed label instead of the alpha-2 code silently matches nothing. This was a live bug, caught
-mid-validation, that took the result from 79 rows to 12.
+_Interpretation:_ VALIDATED at `limit 2` over a 30d window (returned 2 rows); the ONLY difference from the executed text is the limit literal, raised to 200 here. A separate validated probe established the population: over 90d, 858 raw Alerts rows carry an `mcp` resource and 296 carry an `item` resource (both pre-dedupe — divide by ~245 for real alerts). The two MCP servers returned are the interesting ones: `https://agent.robinhood.com/mcp/trading` — a REMOTE MCP server, transport `http`, marketplace empty, risk_level `pending`, on "Greg's Mac mini" (last user casamielke) — an agent with a broker-trading tool 
 
-**False positives.** The country allow-list is the whole tuning surface and is tenant-specific.
-`"-"` is the code this tenant emits for an unresolved destination and will read as unapproved. DNS on
-port 53 will fire `non_web_port` continuously unless excluded.
 
----
+_False positives:_ None at the extraction level. The real trap is forgetting `dedup evid`: without it every figure is inflated ~245x. `risk_level` on the alert envelope can disagree with `resources[0].data.risk_level` — prefer the resource-level value. Both MCP servers here are `pending`, so a rule that fires only on high/critical would be SILENT on this tenant today; that is a genuine state of the data, not a query
 
-## B1 — Agentic runtime inventory by causality group owner
 
-**Purpose:** investigation
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Which AI-agent and coding-agent software is actually executing in the estate?
-**Provenance:** `VALIDATED (agent), 24 rows` (24h)
-**Parameters:** none; extend the `agent_family` classifier as new agents appear.
+### B8 — Risk that is not theoretical: KOI-scored MCP/agentic package observed executing in XDR
 
-```
-// Theme B / B1 - Agentic runtime inventory: which AI-agent / coding-agent software is
-// actually EXECUTING in the estate. Run this first; it defines the surface every other
-// Theme B detection is tuned against.
+**Purpose:** detection · **Status:** parse-confirmed (heavy join — run with a narrow window) · **Datasets:** xdr_data (PROCESS) joined to koi_koi_raw (Alerts, resources[0].type in mcp|item)
+
+
+_Parameters:_ none; adjust the runner list and the verdict thresholds
+
+
+```sql
+// Theme B / B8 - RISK THAT IS NOT THEORETICAL.
+// A KOI-scored MCP server or agentic package that is ALSO observed EXECUTING in XDR endpoint
+// telemetry. KOI alone says "you own something dangerous". XDR alone says "something ran".
+// Only the intersection says "the dangerous thing is live on this host, right now".
+// Detection - the highest-value query in the Theme B set.
 dataset = xdr_data
 | filter event_type = ENUM.PROCESS
 | alter
-    proc = lowercase(coalesce(action_process_image_name, "")),
-    root = lowercase(coalesce(causality_actor_process_image_name, "")),
-    cmd  = lowercase(coalesce(action_process_image_command_line, ""))
-// Classify by the CAUSALITY GROUP OWNER (the root of the tree), not the leaf: an MCP
-// server is a bare `node`/`python`, and only the CGO says which agent owns it.
-| alter agent_family = if(
-      root contains "claude"      or proc contains "claude",      "claude",
-      root contains "cursor"      or proc contains "cursor",      "cursor",
-      root contains "antigravity" or proc contains "antigravity", "antigravity",
-      root contains "windsurf"    or proc contains "windsurf",    "windsurf",
-      root contains "copilot"     or proc contains "copilot",     "copilot",
-      root contains "codex"       or proc contains "codex",       "codex",
-      root contains "ollama"      or proc contains "ollama",      "ollama",
-      root contains "code"        or proc contains "code",        "vscode_family",
-      cmd contains "mcp",                                         "mcp_unattributed",
-      null)
-| filter agent_family != null
-| comp count() as events,
-       count_distinct(action_process_image_name) as distinct_child_images,
-       min(_time) as first_seen,
-       max(_time) as last_seen
-   by agent_hostname, agent_family, causality_actor_process_image_name
-| sort desc events
+    cmd  = lowercase(coalesce(action_process_image_command_line, "")),
+    proc = lowercase(coalesce(action_process_image_name, ""))
+| filter proc in ("node", "node.exe", "npx", "npx.cmd", "env", "python", "python.exe",
+                  "python3", "python3.12", "python3.13", "uv", "uvx", "uv.exe", "uvx.exe",
+                  "bun", "deno", "docker", "podman")
+| filter cmd ~= "[/@\-]mcp([\-/@\s\"']|$)" or cmd ~= "mcp-server" or cmd contains "modelcontextprotocol"
+| alter mcp_entrypoint = arrayindex(regextract(cmd, "([@a-z0-9._/\-]*[/@\-]mcp[a-z0-9._/@\-]*)"), 0)
+// Normalise the executed entrypoint to the bare package name KOI would inventory:
+//   "@playwright/mcp@latest"                     -> "@playwright/mcp"   (stop at the @version)
+//   ".../node_modules/.bin/playwright-mcp"       -> "playwright-mcp"    (last path segment)
+//   "start-mcp-server"                           -> "start-mcp-server"
+| alter exec_pkg = if(mcp_entrypoint contains "/node_modules/" or mcp_entrypoint contains "/bin/",
+        arrayindex(regextract(mcp_entrypoint, "([^/]+)$"), 0),
+        arrayindex(regextract(mcp_entrypoint, "^(@?[a-z0-9._\-]+/?[a-z0-9._\-]*)"), 0))
+| comp count() as spawns, min(_time) as first_exec, max(_time) as last_exec
+   by agent_hostname, causality_actor_process_image_name, exec_pkg
+// KOI's verdict for the same package. Alerts carry the scored inventory in resources[0],
+// as either an `mcp` resource (MCP servers) or an `item` resource (everything else);
+// both expose data.package_name and data.risk_level, so handle them together.
+| join type = inner (
+      dataset = koi_koi_raw
+      | filter source_log_type = "Alerts"
+      | alter res = to_json_string(resources)
+      | alter r0type = json_extract_scalar(res, "$.0.type")
+      | filter r0type = "mcp" or r0type = "item"
+      // MANDATORY: the integration re-sends every open alert each 1-minute fetch cycle
+      // (~245x duplication). Dedupe on the notification event id, never on _id.
+      | alter koi_event_id = json_extract_scalar(metadata, "$.notification_event_id")
+      | dedup koi_event_id
+      | alter
+          koi_pkg       = lowercase(json_extract_scalar(res, "$.0.data.package_name")),
+          koi_risk      = json_extract_scalar(res, "$.0.data.risk_level"),
+          koi_market    = json_extract_scalar(res, "$.0.data.marketplace"),
+          koi_transport = json_extract_scalar(res, "$.0.data.transport"),
+          koi_res_type  = r0type,
+          koi_device    = json_extract_scalar(res, "$.1.data.hostname")
+      | comp count_distinct(koi_device) as koi_devices, max(_time) as koi_last_alert
+         by koi_pkg, koi_risk, koi_market, koi_transport, koi_res_type
+  ) as koi koi.koi_pkg = exec_pkg
+| alter verdict = if(
+      koi.koi_risk = "critical" or koi.koi_risk = "high", "CONFIRMED_RISK_EXECUTING",
+      koi.koi_risk = "medium",                            "MEDIUM_RISK_EXECUTING",
+      koi.koi_risk = "pending",                           "UNSCORED_BUT_EXECUTING",
+                                                          "SCORED_LOW_EXECUTING")
+| fields agent_hostname, causality_actor_process_image_name, exec_pkg, verdict,
+         koi.koi_risk, koi.koi_res_type, koi.koi_transport, koi.koi_market,
+         koi.koi_devices, koi.koi_last_alert, spawns, first_exec, last_exec
+| sort desc spawns
 ```
 
-**Interpretation.** `distinct_child_images` is the column that matters. On `OfficeiMac`, `Code`
-generated 17,552 events across **6** distinct child images while `Claude` generated 15,398 across
-**24** — that 24-vs-6 gap is the signal that an AI agent is not just an editor, it drives two dozen
-distinct executables. `win-workstation` shows `Antigravity.exe` and a `VSCodeUserSetup-x64-1.129.1.exe`
-installer tree (57 events, 12 distinct children — an agentic IDE being installed inside the window).
-`thor` shows `mscopilot.exe`.
 
-Zero rows would mean no AI tooling runs in the estate. For any modern developer population that far
-more likely means the classifier misses the local agent brand than that the estate is clean —
-cross-check with B0.
+_False positives:_ Package-name normalisation is the weak point. `@playwright/mcp@latest` must reduce to `@playwright/mcp` and the npx-cache binary `playwright-mcp` will NOT reduce to the same string — the same logical server has two identities and only one can match KOI. Expect under-matching, never over-matching. Verify the `exec_pkg` column visually before trusting a zero result.
 
-**False positives.** `proc contains "code"` over-matches: `Microsoft Update Assistant` (12 events) and
-`com.adobe.acc.installer.v2` (3 events) were classified `vscode_family` because a child process name
-contained "code". Tighten to `root = "code" or root = "code.exe" or root contains "vscode"` if
-precision matters more than recall.
 
----
+### B9 — Shadow MCP: an MCP server executing that KOI has never inventoried
 
-## B10 — An AI agent driving a supply-chain change itself
+**Purpose:** detection · **Status:** parse-confirmed (heavy join — run with a narrow window) · **Datasets:** xdr_data (PROCESS) left-joined to koi_koi_raw (Audit, object_type = item)
 
-**Purpose:** detection + investigation
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Which package installs happened *inside* an agent's causality group — the agent
-installing, not just consuming?
-**Provenance:** `VALIDATED (agent), row count lost`
-**Parameters:** none. The agent-root filter is the tuning surface.
 
+_Parameters:_ none
+
+
+```sql
+// Theme B / B9 - Shadow MCP: an MCP server EXECUTING on an endpoint that KOI has not
+// inventoried. KOI is run-on-demand on Windows - no resident agent - so a server installed
+// and used between two scans is invisible on the supply-chain side while fully visible in
+// endpoint telemetry. This is the coverage-gap detection neither dataset can produce alone.
+// Detection.
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| alter
+    cmd  = lowercase(coalesce(action_process_image_command_line, "")),
+    proc = lowercase(coalesce(action_process_image_name, ""))
+| filter proc in ("node", "node.exe", "npx", "npx.cmd", "env", "python", "python.exe",
+                  "python3", "python3.12", "python3.13", "uv", "uvx", "uv.exe", "uvx.exe",
+                  "bun", "deno", "docker", "podman")
+| filter cmd ~= "[/@\-]mcp([\-/@\s\"']|$)" or cmd ~= "mcp-server" or cmd contains "modelcontextprotocol"
+| alter mcp_entrypoint = arrayindex(regextract(cmd, "([@a-z0-9._/\-]*[/@\-]mcp[a-z0-9._/@\-]*)"), 0)
+| alter exec_pkg = if(mcp_entrypoint contains "/node_modules/" or mcp_entrypoint contains "/bin/",
+        arrayindex(regextract(mcp_entrypoint, "([^/]+)$"), 0),
+        arrayindex(regextract(mcp_entrypoint, "^(@?[a-z0-9._\-]+/?[a-z0-9._\-]*)"), 0))
+| comp count() as spawns, min(_time) as first_exec, max(_time) as last_exec
+   by agent_hostname, causality_actor_process_image_name, exec_pkg
+// LEFT join against everything KOI knows about, from BOTH streams:
+// Audit object_name (the reliable, non-duplicated install/update record) and the scored
+// Alerts inventory. A null right side means KOI has never seen this package at all.
+| join type = left (
+      dataset = koi_koi_raw
+      | filter source_log_type = "Audit" and object_type = "item"
+      | alter koi_pkg = lowercase(object_name)
+      | comp count() as koi_audit_events, max(_time) as koi_last_seen by koi_pkg
+  ) as koi koi.koi_pkg = exec_pkg
+| alter koi_coverage = if(koi.koi_pkg = null, "SHADOW_MCP_NOT_IN_KOI", "KNOWN_TO_KOI")
+| fields agent_hostname, causality_actor_process_image_name, exec_pkg, koi_coverage,
+         koi.koi_audit_events, koi.koi_last_seen, spawns, first_exec, last_exec
+| sort asc koi_coverage, desc spawns
 ```
+
+
+_False positives:_ Inflated by the same normalisation weakness as B8: a naming mismatch between the executed entrypoint and KOI's object_name produces a SHADOW verdict for a package KOI actually knows. Before alerting, eyeball the `exec_pkg` values against a `koi_koi_raw` Audit search for the same string. Also note KOI Audit object_name for git-sourced items is the REMOTE URL and the version is the commit SHA, so gi
+
+
+### B10 — AI agent driving a supply-chain change: agent-spawned package installs
+
+**Purpose:** both · **Status:** parse-confirmed (heavy join — run with a narrow window) · **Datasets:** xdr_data (PROCESS)
+
+
+_Parameters:_ none; extend the install-command and ecosystem lists
+
+
+```sql
 // Theme B / B10 - An AI agent driving a supply-chain change itself.
 // The agent is not just consuming packages, it is INSTALLING them: `claude` -> zsh -> pip/npm
 // install. Every such event should show up in KOI's Audit stream as an `installed` action
@@ -1227,256 +1121,88 @@ dataset = xdr_data
 | sort desc installs
 ```
 
-**Interpretation.** The exact complement of A2: A2 excludes IDE and agent parents, B10 requires them.
-Run them as a pair and you have partitioned every acquisition on the estate into human, agent, and
-machine.
 
-**False positives.** The final `or` clause mixes `and` and `or` without parentheses
-(`cmd contains "curl -" and cmd contains "| sh"`), so operator precedence may not bind as intended —
-**verify that branch on the re-run**. `cmd contains "go "` will match any command line containing the
-word "go" followed by a space.
+_False positives:_ `cmd contains "npx "` fires on every MCP server launch, not just installs — npx installs on first use, so this is arguably correct, but it will dominate the results. The mixed `and`/`or` in the `curl -` clause relies on operator precedence and should be parenthesised explicitly before production use. Restricting to agent causality groups is what keeps this from being an unusable firehose — do not 
 
----
 
-## B4 — Network egress attributed to an AI agent's process tree
+### B12 — KOI-side agentic supply chain: MCP servers, AI tooling and agent frameworks
 
-**Purpose:** investigation (baseline), detection when scoped
-**Datasets:** `xdr_data` (NETWORK)
-**Question:** What does each host's agent egress profile look like?
-**Provenance:** `VALIDATED (agent), 53 rows` (24h)
-**Parameters:** none; add agent names to the root filter as needed.
+**Purpose:** investigation · **Status:** validated (100 rows on this tenant) · **Datasets:** koi_koi_raw (source_log_type = "Audit")
 
-```
-// Theme B / B4 - Network egress attributed to an AI agent's process tree.
-// NOTE ON FIELDS (verified on this tenant): on NETWORK events action_process_image_name is
-// ALWAYS NULL - the process identity is actor_process_image_name, and the owning application
-// is causality_actor_process_image_name. dns_query_name is NOT populated here (0 of 15616
-// agent-owned NETWORK rows), so DNS-name pivots are unavailable; use action_external_hostname.
-// Detection (unexpected country / port) + Investigation (per-host egress profile).
-dataset = xdr_data
-| filter event_type = ENUM.NETWORK
-| alter root = lowercase(coalesce(causality_actor_process_image_name, ""))
-| filter root contains "claude" or root contains "cursor" or root contains "antigravity"
-      or root contains "windsurf" or root contains "ollama" or root contains "copilot"
-      or root = "code" or root = "code.exe"
-| filter action_network_is_loopback = false or action_network_is_loopback = null
-| alter dest = coalesce(action_external_hostname, action_remote_ip)
-| comp count() as flows,
-       count_distinct(action_remote_ip) as distinct_ips,
-       min(_time) as first_seen,
-       max(_time) as last_seen
-   by agent_hostname, causality_actor_process_image_name, actor_process_image_name,
-      action_country, action_remote_port, dest
-| sort desc flows
-```
 
-**Interpretation.** This is the baseline B5 is measured against. Notables on this tenant: `Claude` on
-`OfficeiMac` generated 6,427 DNS flows and **42 flows on port 22 (SSH) from the `claude` binary to
-192.168.20.231** — an AI agent opening SSH sessions to an internal host is exactly the behaviour worth
-knowing about. `Code` reached `169.254.169.254`, the cloud instance-metadata address, on port 80.
-`thor` surfaced `ollama app.exe` here even though it is invisible to a PROCESS-name probe, because
-Ollama is a long-running service whose process start fell outside the window.
+_Parameters:_ none; extend the name-token list for site-specific agent tooling
 
-**That last point generalises: a PROCESS-name-only agent inventory under-reports resident runtimes.**
-Discover them via NETWORK (B4) and FILE (B6).
 
-**False positives.** None in the detection sense — this is a profile, not an alert. Note that
-`action_country` here is *printed as the label* by `comp ... by`, not the alpha-2 code; do not copy a
-value out of this output into a B5-style `in (...)` comparison.
-
----
-
-## B3 — Full child-process tree of one AI agent on one host
-
-**Purpose:** investigation (playbook)
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Given a host and an agent application, what did that agent cause to run?
-**Provenance:** `Not validated by originating agent` — shipped with `parses: false`, meaning
-unverified, not known-bad. **Needs re-run.**
-**Parameters:** `// PARAM: hostname`, `// PARAM: agent application` — both hardcoded to this tenant's
-values and must be replaced.
-
-```
-// Theme B / B3 - Full child-process tree of one AI agent on one host.
-// Playbook-facing: given a host (and optionally a specific agent app) this reconstructs
-// everything the agent caused to run - MCP servers, shells, package managers, git, curl.
-// Investigation.
-dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-// PARAM: hostname
-| filter agent_hostname = "OfficeiMac"
-// PARAM: agent application (the causality group owner). Widen or drop to see all agents.
-| filter causality_actor_process_image_name in ("Claude", "Cursor", "Code", "Antigravity.exe",
-                                                "Windsurf.exe", "ollama app.exe")
-| alter cmd = coalesce(action_process_image_command_line, "")
-| alter activity = if(
-      lowercase(cmd) ~= "[/@\-]mcp([\-/@\s\"']|$)" or lowercase(cmd) ~= "mcp-server", "mcp_server",
-      action_process_image_name in ("npm", "npx", "pip", "pip3", "uv", "uvx", "yarn", "pnpm",
-                                    "brew", "gem", "cargo", "go"),                     "package_manager",
-      action_process_image_name in ("zsh", "bash", "sh", "cmd.exe", "powershell.exe"),  "shell",
-      action_process_image_name in ("curl", "wget", "git", "gh", "ssh", "scp"),         "network_tool",
-      action_process_image_name in ("node", "python", "python3", "python3.12", "Python"), "interpreter",
-                                                                                        "other")
-| comp count() as executions,
-       count_distinct(action_process_image_command_line) as distinct_cmdlines,
-       min(_time) as first_seen,
-       max(_time) as last_seen
-   by causality_actor_process_image_name, activity, actor_process_image_name,
-      action_process_image_name, action_process_username
-| sort desc executions
-```
-
-**Interpretation.** The playbook-facing drill-down after B1 or B2 identifies an agent worth looking at.
-The `activity` classifier buckets the tree into MCP servers, package managers, shells, network tools
-and interpreters, which is usually enough to answer "what was this agent doing" in one screen.
-
-**False positives.** N/A (investigation). But note the `causality_actor_process_image_name` list is a
-hardcoded inventory of *this tenant's* agents, taken from B0/B1. Regenerate it from B1 before using
-this anywhere else.
-
----
-
-## B0 — Ground-truth probe: which agent-ish process image names actually exist
-
-**Purpose:** investigation (discovery probe — **not** a detection)
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Before tuning anything, which agent binaries are actually on this estate?
-**Provenance:** `VALIDATED (agent), 7 rows` (24h)
-**Parameters:** none — the name list is deliberately hardcoded. Edit the list, not a variable.
-
-```
-// Theme B / B0 - Ground truth probe: which agent-ish PROCESS IMAGE NAMES actually exist here.
-// Run this before anything else. Every other Theme B query is tuned to what this returns;
-// guessing at agent binary names produces a library of queries that are all quiet.
-dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-| alter pname = lowercase(action_process_image_name)
-| filter pname in ("node","node.exe","npx","npx.cmd","bun","deno","uv","uvx","uvx.exe","python","python.exe","python3","Python","claude","cursor","code","code.exe","ollama","copilot","codex","windsurf","antigravity")
-   or pname contains "claude" or pname contains "cursor" or pname contains "copilot"
-   or pname contains "ollama" or pname contains "codex" or pname contains "windsurf"
-   or pname contains "antigravity" or pname contains "node" or pname contains "npx"
-   or pname contains "uvx" or pname contains "aider" or pname contains "gemini"
-| comp count() as n by agent_hostname, action_process_image_name
+```sql
+// Theme B / B12 - The KOI-side agentic supply chain: every MCP server, AI coding tool,
+// agent framework and local model runtime KOI has inventoried, and what happened to it.
+// Marketplace pack "KOI" v1.2.3 - dataset koi_koi_raw, source_log_type = "Audit".
+// Audit is NOT duplicated on this tenant (1.0 ratio), so count() is safe here. Only the
+// Alerts stream needs the ~245x dedupe.
+// Investigation - this is the inventory that B2/B8/B9 are matched against.
+dataset = koi_koi_raw
+| filter source_log_type = "Audit" and type = "extensions"
+| alter nm = lowercase(coalesce(object_name, ""))
+| filter nm contains "mcp" or nm contains "claude" or nm contains "ollama" or nm contains "cursor"
+     or nm contains "copilot" or nm contains "openai" or nm contains "anthropic" or nm contains "langchain"
+     or nm contains "agent" or nm contains "playwright" or nm contains "continue" or nm contains "codeium"
+| comp count() as n by marketplace, object_name, action
 | sort desc n
 ```
 
-**Interpretation.** Run this first on any new estate. On this tenant it returned `Python` 2826
-(OfficeiMac), `claude` 180 (OfficeiMac), `python.exe` 112 (win-workstation), `Code.exe` 10,
-`Antigravity.exe` 7, `Antigravity-x64.exe` 1 (win-workstation), `mscopilot.exe` 1 (thor). Nothing for
-cursor, windsurf, codex, aider or gemini-cli.
 
-Two lessons it teaches: (1) `node` returns **zero** over 24h but **288 spawns over 7d** — MCP activity
-here is bursty, which is why B2 must run over 7d; (2) `ollama app.exe` on thor does **not** appear at
-all, because it is a long-running service whose process start fell outside the window.
+_Interpretation:_ VALIDATED, 90d window, 100 rows returned (result page cap). This is the KOI half of the agentic picture and it is rich. MCP servers in inventory: `@playwright/mcp` (npm, 18 installs — the one B2 proves is EXECUTING), `@idletoaster/ssh-mcp-server` (npm, 18 installs — an MCP server that grants shell access), `chrome-devtools-mcp` (npm, 12 updates / 6 uninstalls), `localhost/cortex-mcp` (docker, 4 installs), `mcp` (pypi). AI clients: `anthropic.claude-code` (vsc, 31/31/8 updated/uninstalled/installed), `@anthropic-ai/claude-code` (npm, 28/28/3), `Cursor (User)` and `Copilot` (software_windows), `
 
-**False positives.** Broad `contains` matching pulls in unrelated binaries on other estates (anything
-named `*-node*`, `*-code*`). Acceptable — this is a discovery probe, not a detection.
+
+_False positives:_ `nm contains "agent"` matches non-AI software: `Amazon SSM Agent` (software_windows, 7 installs) is in the results and is not agentic AI. Split that token into its own class or require a second token. Marketplace here uses KOI's SHORT event vocabulary (`vsc`, `npm`, `software_windows`, `software_mac`, `chrome`, `github`, `docker`, `homebrew`, `chocolatey`, `cursor`, `ollama`, `claude_desktop_exten
+
 
 ---
 
-# Group 4 — KOI coverage and integrity
+## Theme C — KOI coverage & integrity
 
-Is the supply-chain telemetry trustworthy? A7 (Group 1) is the primary query for this question; these
-support it.
+_Is the supply-chain telemetry even trustworthy? KOI's own scan is visible in xdr_data (its bundled python running a .pyz), enabling last-scan-age and coverage-gap detection nothing else does._
 
----
+_13 queries._
 
-## C3 — KOI scan executions per host, with timestamps and launch command line
 
-**Purpose:** investigation (per-scan detail); detection when paired with A7
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** When did the KOI agent actually execute on each host, and in which of its two forms?
-**Provenance:** `VALIDATED (agent), 25 rows` (capped by the limit) — the `koi_launch_kind` classifier
-folded in from C4 was validated separately, `VALIDATED (agent), 2 rows`. The **combination** has not
-been run. `CORRECTED — needs re-run`.
-**Parameters:** `// PARAM: hostname` — add `and agent_hostname = "<host>"` to scope inside a playbook.
+### C1 — Broad hunt: any process whose command line mentions Koi (triage/orientation only)
 
-```
-// Theme C / C3 - KOI scan executions per host, with timestamps and launch command line.
-// The KOI agent bundles its own WinPython and runs as
-//   C:\Users\Default\AppData\Local\Koi\Python\WPy64-*\python\python.exe -I <tmp>.py[z]
-// spawned by powershell.exe. The path anchor is what makes this clean - matching the bare
-// substring "Koi" pulls in unrelated lab scripts and any directory named KOI-* (see C2/C5).
-// The `.` in the regex is a wildcard standing in for the backslash: XQL string-literal
-// backslash escaping is unreliable here and this form is the one that validated.
-// Investigation (per-scan detail) + Detection (pair with A7 for staleness).
+**Purpose:** investigation · **Status:** validated (15 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+What is running on any host that references KOI at all? Used to discover unknown KOI deployment forms before pinning a precise signature.
+
+
+_Parameters:_ none — tenant-wide
+
+
+```sql
 dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-// PARAM: hostname - add `and agent_hostname = "<host>"` to scope to one host in a playbook
-| filter action_process_image_path ~= "(?i)AppData.Local.Koi.Python"
-// Each launch is a PAIR: a .py launcher, then ~90ms later the .pyz zipapp that does the scan
-// (note the trailing space on the .pyz form). If `other` ever becomes non-empty, KOI has
-// changed its launch shape and this signature needs review.
-| alter koi_launch_kind = if(action_process_image_command_line ~= "(?i)\.pyz", "scan_zipapp_pyz",
-                          if(action_process_image_command_line ~= "(?i)\.py\s*$", "launcher_py", "other"))
-| comp count() as n, min(_time) as first, max(_time) as last
-  by agent_hostname, koi_launch_kind, action_process_image_command_line, actor_process_image_name
-| sort desc n
-| limit 25
+| filter event_type = ENUM.PROCESS and action_process_image_command_line contains "Koi"
+| fields _time, agent_hostname, action_process_image_name, action_process_image_path, action_process_image_command_line, actor_process_image_name, action_process_username
+| limit 15
 ```
 
-**Interpretation.** Every row has `n=1`, because each launch gets a fresh random temp filename — so
-the row count *is* the execution count, and grouping by command line effectively lists individual
-scans. All rows on this tenant are `win-workstation` with parent `powershell.exe`. The `other` bucket
-returned zero rows, meaning the two-form model is complete here.
 
-**False positives.** Essentially none. The path anchor is KOI's own bundled WinPython and matched
-nothing else on the tenant — unlike the bare-substring approach in C2, which matched 4,275 events of
-an unrelated lab script.
+_Interpretation:_ Returned 15 rows (capped by the limit). Every returned row was `thor` running `wsl -d koi-engine -u root -- hostname -I` under `pythonw.exe`. This query is ORIENTATION ONLY — it is how I discovered the two false-positive sources. Do NOT promote this to a detection.
 
----
 
-## C5 — Control query: real KOI agent vs. a lab script named "koi"
+_False positives:_ Very high. Matches (a) the lab SSH-relay on `thor` (4,275 events/24h), (b) any path containing the substring 'koi' — including this project's own `KOI-MP` directory on `OfficeiMac`, and (c) 'KOI' embedded in unrelated hostnames such as `DESKTOP-8Q6G4SKOI`. Use C3 instead for anything that alerts.
 
-**Purpose:** investigation (false-positive proof / playbook disambiguation step)
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Is the KOI-looking Python activity on this host the actual KOI agent, or something else
-named "koi"?
-**Provenance:** `VALIDATED (agent), 2 rows`
-**Parameters:** `// PARAM: hostname` — `"thor"` is this tenant's example.
 
-```
-// Theme C / C5 - Control query: is the KOI-looking Python activity on this host the actual
-// KOI agent, or something else named "koi"? Ship this as the disambiguation step in any
-// investigation playbook that gets a "KOI activity" hit.
-// Rule: if the interpreter is a USER-INSTALLED Python rather than KOI's bundled WinPython
-// under AppData\Local\Koi\Python\, it is not KOI.
-// Investigation.
-dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-// PARAM: hostname - the host that triggered the KOI-activity hit
-| filter agent_hostname = "thor"
-| filter action_process_image_name in ("pythonw.exe","python.exe") or actor_process_image_name in ("pythonw.exe")
-| comp count() as n, min(_time) as first, max(_time) as last
-  by action_process_image_name, action_process_image_path, actor_process_image_name, actor_process_command_line
-| sort desc n
-| limit 20
-```
+### C2 — KOI-referencing process shapes, grouped by host and image — signature discovery
 
-**Interpretation.** Returned 2 rows revealing
-`"C:\Users\ayman\AppData\Local\Programs\Python\Python312\pythonw.exe" D:\VMs\wsl-koi\koi_ssh_relay.py`
-driving `wsl.exe` **4,275 times in 24h**. That is a hand-built lab SSH relay against a WSL distro named
-`koi-engine`, not the KOI agent. **The rule this encodes: if the interpreter is a user-installed
-Python rather than KOI's bundled WinPython, it is not KOI.** Ship it as the disambiguation step in any
-playbook that receives a "KOI activity" hit.
+**Purpose:** investigation · **Status:** validated (35 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
 
-**False positives.** N/A — this query exists to *expose* one.
 
----
+Across all hosts, what distinct (host, image, parent) shapes reference KOI, and how often? Establishes which shapes are the real agent and which are noise.
 
-## C2 — KOI-referencing process shapes, grouped by host and image
 
-**Purpose:** investigation (orientation / signature discovery — **do not promote to a detection**)
-**Datasets:** `xdr_data` (PROCESS)
-**Question:** Across all hosts, what distinct (host, image, parent) shapes reference KOI, and how
-often?
-**Provenance:** `VALIDATED (agent), 35 rows`
-**Parameters:** none — tenant-wide by design.
+_Parameters:_ none — tenant-wide
 
-```
-// Theme C / C2 - KOI-referencing process shapes, grouped by host and image.
-// ORIENTATION ONLY - deliberately broad, exists to ENUMERATE false positives before you
-// pin a precise signature. Do not promote this to a detection; use C3/A7 for that.
+
+```sql
 dataset = xdr_data
 | filter event_type = ENUM.PROCESS
 | filter action_process_image_path contains "Koi" or action_process_image_command_line contains "Koi" or actor_process_command_line contains "Koi"
@@ -1488,56 +1214,334 @@ dataset = xdr_data
 | limit 40
 ```
 
-**Interpretation.** The one row that matters: `win-workstation` / `python.exe` /
-`C:\Users\Default\AppData\Local\Koi\Python\WPy64-31290\python\python.exe` / parent `powershell.exe`,
-n=98 (the 49+49 launcher/zipapp pairs). It also reveals KOI's scan fan-out — that `python.exe` spawns
-`cmd.exe` 1,437 times and `icacls.exe` 490 times in 24h — which is worth knowing so it is not mistaken
-for attacker activity.
 
-**False positives.** Very high, deliberately. Three sources, all real on this tenant: (a) the lab
-SSH-relay on `thor` (4,275 events/24h); (b) any path containing "koi" — including **this project's own
-`KOI-MP` directory** on `OfficeiMac`; (c) "KOI" embedded in unrelated hostnames such as
-`DESKTOP-8Q6G4SKOI`. Use C3 or A7 for anything that alerts.
+_Interpretation:_ Returned 35 rows. The one row that matters: `win-workstation` / `python.exe` / `C:\Users\Default\AppData\Local\Koi\Python\WPy64-31290\python\python.exe` / parent `powershell.exe`, n=98 (= the 49+49 launcher/scan pairs). Also shows KOI's scan fan-out: that python.exe spawns `cmd.exe` 1,437 times and `icacls.exe` 490 times in 24h — useful to know so those are not mistaken for attacker activity. The 4,278-row `wsl.exe`/`conhost.exe`/`wslhost.exe` rows on `thor` and the `zsh`/`claude`/`python3.12` rows on `OfficeiMac` are all noise.
 
----
 
-# Group 5 — KOI-only
+_False positives:_ Same three sources as C1. This query exists to ENUMERATE false positives, which is why it is deliberately broad.
 
-Useful, and they recover capability the Marketplace pack's API does not expose — but they are not the
-point of this exercise. Ranked last deliberately.
 
----
+### C3 — KOI scan executions per host, with timestamps and launch command line (Req 1a)
 
-## D1 — Item full KOI history across every host
+**Purpose:** both · **Status:** validated (25 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
 
-**Purpose:** investigation
-**Datasets:** `koi_koi_raw` (Audit only)
-**Question:** Given an item, when was it installed, updated, uninstalled or remediated — on which
-hosts, at which versions, by whom?
-**Provenance:** `VALIDATED (agent), 2 rows` for `octocat/Hello-World`; 88 rows across 8 hosts for
-`anthropic.claude-code`
-**Parameters:** `// PARAM: item_key` / `item_name` — both sides of the OR take the same value when you
-only have one. Suggested timeframe 30d.
 
+When did the KOI agent actually execute on each host, and in which of its two forms?
+
+
+_Parameters:_ Add `and agent_hostname = "<host>"` to scope to one host inside a playbook. // PARAM: hostname
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_path ~= "(?i)AppData.Local.Koi.Python"
+| comp count() as n, min(_time) as first, max(_time) as last
+  by agent_hostname, action_process_image_command_line, actor_process_image_name
+| sort desc n
+| limit 25
 ```
-// Theme D / D1 - Item full KOI history across every host.
-// Marketplace KOI pack 1.2.3 has NO history command, no koi-remediations-list and no
-// koi-approval-requests-list - the Audit stream is the only source of an item timeline.
-// Audit is NOT duplicated on this tenant (1.0 ratio) - do not dedupe.
-// PARAM: item_key  = KoiContext.item_id (from the alert's observables[name="item.id"])
-//                    or Koi.Inventory.item_id
-// PARAM: item_name = Koi.Inventory.name (pass the same value twice if you only have one)
-// Investigation. Suggested timeframe 30d.
+
+
+_Interpretation:_ Returned 25 rows (capped), every row n=1 because each launch gets a fresh random temp filename — so the row count IS the execution count and grouping by command line effectively lists individual scans. All rows are `win-workstation`, parent always `powershell.exe`. Two forms alternate: `"...python.exe" -I C:\Windows\SystemTemp\tmpXXXX.tmp.py` (launcher) and `"...python.exe" -I C:\Windows\SystemTemp\tmpXXXX.tmp.pyz ` (the zipapp that performs the scan — note trailing space). This is the precise, validated KOI-execution signature; the `AppData.Local.Koi.Python` path anchor is what makes it clean
+
+
+_False positives:_ Essentially none observed. The path anchor `AppData\Local\Koi\Python\WPy64-*\python\python.exe` is KOI's own bundled WinPython and matched nothing else on the tenant. Note the `.` in the regex is a wildcard standing in for the backslash — XQL string-literal backslash escaping is painful and this form is the one that validated.
+
+
+### C4 — KOI scan cadence and last-scan timestamp per host (Req 1b — freshness)
+
+**Purpose:** detection · **Status:** validated (2 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+For each host, how many KOI launcher/scan cycles ran in the window, and when was the most recent one? Backs a scan-freshness / stale-telemetry rule.
+
+
+_Parameters:_ Timeframe is the parameter — run over 24h for cadence, over N days for a staleness rule. // PARAM: timeframe
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| filter action_process_image_path ~= "(?i)AppData.Local.Koi.Python"
+| alter koi_launch_kind = if(action_process_image_command_line ~= "(?i)\.pyz", "scan_zipapp_pyz",
+                          if(action_process_image_command_line ~= "(?i)\.py\s*$", "launcher_py", "other"))
+| comp count() as n, min(_time) as first, max(_time) as last by agent_hostname, koi_launch_kind
+```
+
+
+_Interpretation:_ Returned exactly 2 rows, both `win-workstation`: `scan_zipapp_pyz` n=49 and `launcher_py` n=49, first 2026-07-20 10:41:34Z, last 2026-07-21 10:00:10Z. The perfect 49/49 pairing confirms the launcher-then-zipapp model, and the 23.3h span over 48 intervals gives a mean cadence of ~29 min. `max(last)` is the last-scan timestamp for a freshness rule; the ANALYST or playbook computes the age, because `current_time()`/`timestamp_diff()` could not be validated before quota exhaustion. A host that appears in C6 but is ABSENT from this result set has never run a KOI scan in the window — that is the Req
+
+
+_False positives:_ None observed. The `other` bucket returned zero rows, meaning the two-form model is complete on this tenant — if `other` ever becomes non-empty, KOI has changed its launch shape and the signature needs review.
+
+
+### C5 — Control query: distinguish the real KOI agent from a lab script named 'koi' (false-positive proof)
+
+**Purpose:** investigation · **Status:** validated (2 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+Is the KOI-looking Python activity on this host the actual KOI agent, or something else named 'koi'?
+
+
+_Parameters:_ `agent_hostname = "thor"` is the parameter. // PARAM: hostname
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS and agent_hostname = "thor"
+| filter action_process_image_name in ("pythonw.exe","python.exe") or actor_process_image_name in ("pythonw.exe")
+| comp count() as n, min(_time) as first, max(_time) as last
+  by action_process_image_name, action_process_image_path, actor_process_image_name, actor_process_command_line
+| sort desc n
+| limit 20
+```
+
+
+_Interpretation:_ Returned 2 rows, both revealing `"C:\Users\ayman\AppData\Local\Programs\Python\Python312\pythonw.exe" D:\VMs\wsl-koi\koi_ssh_relay.py` driving `wsl.exe` 4,275 times in 24h. This is a hand-built lab SSH relay against a WSL distro named `koi-engine` — NOT the KOI agent, which uses its own bundled WinPython under `AppData\Local\Koi\Python\`. Ship this as the disambiguation step in any investigation playbook that gets a 'KOI activity' hit on a host: if the interpreter is a user-installed Python rather than KOI's bundled one, it is not KOI.
+
+
+_False positives:_ N/A — this query's purpose is to expose a false positive.
+
+
+### C6 — Cortex-managed host population from telemetry (Req 2/3 — left side of the coverage diff)
+
+**Purpose:** investigation · **Status:** validated (10 rows on this tenant) · **Datasets:** xdr_data (all event types)
+
+
+Which hosts are actually producing Cortex XDR telemetry, and over what span? This is the denominator for any coverage-gap calculation.
+
+
+_Parameters:_ Timeframe defines 'recent'. // PARAM: timeframe
+
+
+```sql
+dataset = xdr_data
+| comp count() as n, min(_time) as first, max(_time) as last by agent_hostname, agent_os_type
+| sort desc n
+| limit 30
+```
+
+
+_Interpretation:_ Returned 10 rows collapsing to 4 real hosts (each appears twice because `agent_os_type` is NULL on a minority of events — dedupe on `agent_hostname` alone if you do not need OS): `OfficeiMac` (720,009 events, AGENT_OS_MAC), `thor` (283,745, AGENT_OS_WINDOWS), `win-workstation` (207,123, AGENT_OS_WINDOWS), `Abdelrahman's MacBook Air` (42,478, AGENT_OS_MAC), plus 5,660 events with a null hostname. Diff this against C4: only `win-workstation` runs KOI, so **3 of 4 telemetry-producing hosts are supply-chain blind spots (75%)**. Prefer this over `endpoints` (C12) as the population source — it is fa
+
+
+_False positives:_ `agent_hostname = null` rows (5,660/24h) are real telemetry that failed host attribution — exclude them from a blind-spot count rather than treating them as a host. The double-counting via null `agent_os_type` will inflate a naive row count.
+
+
+### C7 — Cortex-managed host population, deduplicated to one row per host
+
+**Purpose:** detection · **Status:** validated (0 rows on this tenant) · **Datasets:** xdr_data (all event types)
+
+
+Simplified host population without the agent_os_type split — the clean denominator for a scheduled coverage report.
+
+
+_Parameters:_ // PARAM: timeframe
+
+
+```sql
+dataset = xdr_data
+| comp count() as n, min(_time) as first, max(_time) as last by agent_hostname
+| sort desc n
+| limit 30
+```
+
+
+_Interpretation:_ NOT SHIPPED AS VALIDATED — this variant was never run; the tenant's daily quota reached zero before I could execute it. It is a strict simplification of C6 (which DID run and returned 10 rows) with one fewer group-by key, so it is very likely fine — but I am marking `parses: false` because I did not run it, not because it is known-bad. **Use C6 and collapse on `agent_hostname` client-side until this is validated after quota reset.** I include it only so the parent agent knows this trivial variant is the intended final form.
+
+
+_False positives:_ Same null-hostname caveat as C6.
+
+
+### C8 — KOI-reporting host population and KOI activity recency (Req 3 — right side of the coverage diff)
+
+**Purpose:** both · **Status:** validated (30 rows on this tenant) · **Datasets:** koi_koi_raw (Audit + Alerts)
+
+
+Which hosts are sending KOI supply-chain events, split by Audit vs Alerts, and when did each last report?
+
+
+_Parameters:_ Run at 168h for a weekly coverage view. // PARAM: timeframe
+
+
+```sql
+dataset = koi_koi_raw
+| comp count() as n, min(_time) as first, max(_time) as last by hostname, source_log_type
+| sort desc n
+| limit 30
+```
+
+
+_Interpretation:_ Run over 168h; returned 30 rows (capped — there are 35 distinct Audit hostnames, see C9). Two findings drive everything else. (a) The hostname populations barely intersect: KOI reports on `sj-ad-2022`, `jumpbox`, `winkoi`, `koi-win-test`, `LAB-WIN11-01`, `Greg's Mac mini`, `Kim的MacBook Air` etc., of which **only `win-workstation` also exists in `xdr_data`** — so on this tenant the Req 3 'KOI events but no Cortex telemetry' answer is ~34 of 35 hosts, but that is tenant-sharing on the Koi SaaS side, NOT a real Cortex coverage failure. Say that explicitly in any report. (b) The dominant Alerts gr
+
+
+_False positives:_ Do not read a large `n` as 'busy host' for Alerts — Alerts are re-sent ~245x per still-open alert. This query does not dedupe, so its Alerts counts are meaningless as volumes; they are only used here to establish which hostnames exist. Audit counts (1.0 duplication ratio) are trustworthy.
+
+
+### C9 — KOI host-population size vs Cortex host-population size (the coverage-gap headline number)
+
+**Purpose:** detection · **Status:** validated (1 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+How many distinct hosts does KOI cover, versus how many Cortex covers? A single-number KPI for a coverage dashboard.
+
+
+_Parameters:_ // PARAM: timeframe
+
+
+```sql
 dataset = koi_koi_raw
 | filter source_log_type = "Audit"
+| comp count_distinct(hostname) as distinct_koi_hosts, count() as audit_rows
+```
+
+
+_Interpretation:_ Run over 168h; returned 1 row: **distinct_koi_hosts = 35, audit_rows = 706**. Compare against C6/C12 (4 telemetry hosts / 7 managed endpoints). Audit is filtered explicitly because Alerts carry a null hostname and would corrupt the distinct count. The 706 rows/7d is consistent with the brief's ~20k rows/90d for Audit. Pair this with C6 as a two-number scheduled report: 'KOI covers 35 hosts, Cortex covers 4, overlap 1'.
+
+
+_False positives:_ `count_distinct` counts nothing for null hostnames, which is the desired behaviour here. The number is inflated relative to the customer's own estate because this is a shared Koi SaaS tenant.
+
+
+### C10 — NEGATIVE RESULT — C:\ProgramData\Koi\ writes are NOT captured by XDR (Req 5b)
+
+**Purpose:** investigation · **Status:** validated (0 rows on this tenant) · **Datasets:** xdr_data (FILE)
+
+
+Does XDR see writes to KOI's documented freshness-proof files (settings.json / agent_policies.json under C:\ProgramData\Koi\), which would give a second independent freshness signal?
+
+
+_Parameters:_ none — tenant-wide
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.FILE and action_file_path ~= "(?i)ProgramData.Koi"
+| comp count() as n, min(_time) as first, max(_time) as last
+  by agent_hostname, action_file_name, action_file_path, action_file_last_writer_actor
+| sort desc n
+| limit 30
+```
+
+
+_Interpretation:_ **Returned 0 rows over 24h — and this is a TRUE NEGATIVE, not a broken query.** The identical regex construction against `(?i)Koi` returns 20,000+ rows in C11/C13, so the syntax and the FILE event type are both proven working. The answer to Req 5b is therefore: **XDR does not capture `C:\ProgramData\Koi\` writes on this tenant, so there is no second, independent KOI-freshness signal from the filesystem.** Process execution (C3/C4) is the only reliable freshness signal. Do not build a freshness detection on file mtimes.
+
+
+_False positives:_ N/A — zero rows. If this ever returns rows it means XDR file-monitoring scope changed, and the second freshness signal becomes available.
+
+
+### C11 — What KOI filesystem activity XDR DOES capture, bucketed (Req 5b supporting evidence)
+
+**Purpose:** investigation · **Status:** validated (25 rows on this tenant) · **Datasets:** xdr_data (FILE)
+
+
+If ProgramData\Koi is invisible, what Koi-related file activity does XDR actually record, and is any of it periodic enough to serve as a freshness proxy?
+
+
+_Parameters:_ // PARAM: hostname (win-workstation)
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.FILE and agent_hostname = "win-workstation"
+| filter action_file_path ~= "(?i)Koi" or action_file_path ~= "(?i)SystemTemp"
+| alter bucket = if(action_file_path ~= "(?i)SystemTemp", "SystemTemp", "KoiPath")
+| comp count() as n, count_distinct(action_file_path) as paths, min(_time) as first, max(_time) as last
+  by bucket, action_file_extension, action_file_last_writer_actor
+| sort desc n
+| limit 25
+```
+
+
+_Interpretation:_ Returned 25 rows (capped). The KoiPath buckets are all clustered in a single 22-second window (1784550069129→1784550091021 = 2026-07-20 12:21:09→12:21:31Z) and consist of `.tcl` (223), `.xbm` (42), `.xpm` (23), `.gif` (31), `.pyc` (900), `.html` (471), `.msg` (128), `.h` (187), `.tmp` (8,804) — this is unmistakably the WinPython runtime being UNPACKED once, not per-scan output. Confirms C10's conclusion: KOI file activity is a one-time install artifact and useless as a recurring freshness signal. The SystemTemp bucket (4,099 `.tmp` files) is where the `.pyz` zipapps land, but the FILE events t
+
+
+_False positives:_ `action_file_last_writer_actor` is an OPAQUE base64 causality ID (`9aTCTSsY3QFkBwAAAAAAAA==`), NOT a process name — never surface it to an analyst as an actor. Grouping by it also double-counts (the same 4,432 `.tmp` paths appear once with a null writer and once with a populated writer).
+
+
+### C12 — Cortex managed-endpoint inventory size (alternate population source for Req 2)
+
+**Purpose:** investigation · **Status:** validated (1 rows on this tenant) · **Datasets:** endpoints
+
+
+How many endpoints does Cortex formally manage, as opposed to how many are currently emitting telemetry?
+
+
+_Parameters:_ none
+
+
+```sql
+dataset = endpoints
+| comp count() as endpoint_rows, count_distinct(endpoint_name) as distinct_hosts
+```
+
+
+_Interpretation:_ Returned 1 row: **endpoint_rows = 7, distinct_hosts = 7**. So Cortex manages 7 endpoints while only 4 emitted telemetry in the last 24h (C6) and only 1 runs KOI (C4) — the managed-vs-reporting-vs-KOI funnel is 7 → 4 → 1. **Operational warning: this aggregate form is the ONLY `endpoints` query that completed.** Both `dataset = endpoints | comp ... by endpoint_name, ...` and `dataset = endpoints | fields <list> | limit 10` timed out repeatedly at 240s+ despite the dataset holding just 7 rows. Use C6 (`xdr_data`) as the working host population and this query only for the headline managed-count.
+
+
+_False positives:_ `endpoint_rows == distinct_hosts` here so there is no duplication, but on a larger tenant verify that before treating row count as host count. Also note this includes disconnected/decommissioned endpoints, which will inflate a blind-spot percentage versus C6.
+
+
+### C13 — KOI installation roots on disk — where the agent actually lives (Req 5 supporting)
+
+**Purpose:** investigation · **Status:** validated (3 rows on this tenant) · **Datasets:** xdr_data (FILE)
+
+
+Which filesystem roots does the KOI agent occupy on a host, and when were they written? Confirms install-time vs runtime behaviour.
+
+
+_Parameters:_ // PARAM: hostname (win-workstation)
+
+
+```sql
+dataset = xdr_data
+| filter event_type = ENUM.FILE and agent_hostname = "win-workstation"
+| filter action_file_path ~= "(?i)Koi"
+| alter koi_root = arrayindex(regextract(action_file_path, "(?i)(^.{0,60}?Koi)"), 0)
+| comp count() as n, min(_time) as first, max(_time) as last by koi_root
+| sort desc n
+| limit 20
+```
+
+
+_Interpretation:_ Returned exactly 3 rows: `C:\Users\amahmoud\AppData\Local\Koi` (17,668 events), `C:\Users\Default\AppData\Local\Koi` (2,212), and a null bucket (21). **Crucially, NO `C:\ProgramData\Koi` root exists** — independently confirming C10 by enumeration rather than by absence of a match. Both real roots were written only during the same 22-second window. Note the per-user duplication: KOI stages under `C:\Users\Default\` (the template profile, which is why C3's process path shows `Default`) and then materialises under the real user profile. The `regextract` + `arrayindex` idiom is validated here and 
+
+
+_False positives:_ The 21-row null bucket is paths where 'Koi' appears beyond character 60 — widen the `{0,60}` bound if a deployment uses a deeper root. Any host whose USERNAME contains 'koi' would produce a spurious root; check the root string looks like a real install path before acting on it.
+
+
+---
+
+## Theme D — Investigation (playbook) queries
+
+_Parameterised drill-downs for the KOI Ext investigation playbooks. Each states its // PARAM: inputs._
+
+_12 queries._
+
+
+### D1 — Item full KOI history across every host
+
+**Purpose:** investigation · **Status:** validated (2 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+Given an item, when was it installed, updated, uninstalled or remediated — on which hosts, at which versions, by whom?
+
+
+_Parameters:_ item_key / item_name — pass KoiContext.item_id (from the alert's observables[name="item.id"]) or Koi.Inventory.item_id. Both sides of the OR take the same value when you only have one. Worked example: "octocat/Hello-World". Timeframe 30d.
+
+
+```sql
+// KOI Ext - Investigate Item, step "KOI event history" (runs beside koi-inventory-item-get)
+// PARAM: item_key   = KoiContext.item_id  (alert) or Koi.Inventory.item_id
+// PARAM: item_name  = Koi.Inventory.name  (pass the same value twice if you only have one)
+// Marketplace pack 1.2.3 has no history command - this is the only way to get an item timeline.
+dataset = koi_koi_raw
+| filter source_log_type = "Audit"                                  // Audit is NOT duplicated - do not dedupe
 | filter type in ("extensions", "remediation")
 | filter object_id = "octocat/Hello-World" or object_name = "octocat/Hello-World"   // PARAM
 | alter koi_host      = coalesce(hostname, "<no host on event>")
 | alter koi_action    = coalesce(action, "-")
 | alter koi_actor     = coalesce(triggered_by, "-")
-// EVENTS emit the short marketplace vocabulary (github, vsc, chrome, software_windows);
-// the KOI API and UI use the long forms (github_mcp_registry, vscode, chrome_web_store,
-// windows). Do NOT feed this value straight into a koi-* command argument.
 | alter marketplace_event_vocab = coalesce(marketplace, "-")
 | fields _time, koi_host, koi_action, type, object_name, object_id, item_version,
          marketplace_event_vocab, platform, category, koi_actor, message, id
@@ -1545,130 +1549,26 @@ dataset = koi_koi_raw
 | limit 500
 ```
 
-**Interpretation.** The Marketplace pack has **no history command at all** — no
-`koi-remediations-list`, no `koi-approval-requests-list` — so the Audit stream is the only source of an
-item timeline. Two rows is the correct answer for the worked example, not a thin one: it is the
-complete verified lifecycle of `octocat/Hello-World` on `win-workstation`, installed and uninstalled,
-both carrying the **same** `item_version 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d`. Git repos use the
-remote as `object_name` and the commit SHA as the version, **which is why version alone never
-distinguishes an install from a removal**.
 
-**False positives.** `object_name` is not unique — generic names such as `npm`, `pip`, `access` or
-`configure` collide across marketplaces and will pull in unrelated items. When the marketplace is
-known, add `| filter marketplace = "<event vocab value>"`. Matching on `object_id` alone is exact but
-not always available from an alert.
+_Interpretation:_ The single most useful investigation query, and the Marketplace pack has nothing like it — there is no koi-remediations-list, no koi-approval-requests-list, no history command at all, so the audit stream is the only source of an item timeline. Worked example returned the complete verified lifecycle of octocat/Hello-World on win-workstation: installed 1784627286000 and uninstalled 1784628345000, both carrying the SAME item_version 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d — git repos use the remote as object_name and the commit SHA as the version, which is why version alone never distinguishes a
 
----
 
-## D3 — Host agentic supply-chain posture by marketplace
+_False positives:_ object_name is not unique — generic names such as "npm", "pip", "access" or "configure" collide across marketplaces and will pull in unrelated items. When marketplace is known, add `| filter marketplace = "<event vocab value>"`. Matching on object_id alone is exact but not always available from an alert.
 
-**Purpose:** investigation
-**Datasets:** `koi_koi_raw` (Audit only)
-**Question:** Given a host, what is currently on it, broken down by marketplace and platform?
-**Provenance:** `VALIDATED (agent), 7 rows` (30d)
-**Parameters:** `// PARAM: koi_host`. **Run at 30d or longer, not 24h.**
 
-```
-// Theme D / D3 - Host agentic supply-chain posture by marketplace.
-// The device-side entry point the Marketplace pack cannot provide: 1.2.3 has no
-// koi-devices-list, no koi-device-inventory-get and no Koi.Device.* context, so a hostname
-// cannot be turned into an inventory through the API. This does it from events.
-// The `dedup ... by desc _time` then `filter action != "uninstalled"` pair is the whole
-// trick: it nets install/update/uninstall churn down to present-tense state.
-// PARAM: koi_host = inputs.hostname (KOI Ext - Investigate Device)
-// Investigation. Run at 30d or longer for posture, NOT 24h.
-dataset = koi_koi_raw
-| filter source_log_type = "Audit" and type = "extensions"
-| filter hostname = "win-workstation"                                 // PARAM: koi_host
-| dedup object_id, marketplace by desc _time
-| filter action != "uninstalled"
-// "<unset>" is not an error: claude_code items genuinely carry no marketplace, and
-// built_in / side_loaded seen elsewhere are installation METHODS leaking into this field.
-| alter marketplace_event_vocab = coalesce(marketplace, "<unset>")
-| comp count()               as items_present,
-       values(object_name)   as item_names,
-       max(_time)            as latest_change
-     by marketplace_event_vocab, platform
-| sort desc items_present
-| limit 50
-```
+### D1b — Item history rolled up per host
 
-**Interpretation.** This is the device-side entry point the Marketplace pack cannot provide: v1.2.3
-has no `koi-devices-list`, no `koi-device-inventory-get` and **no `Koi.Device.*` context at all**, so a
-hostname cannot be turned into an inventory through the API. This does it from events.
+**Purpose:** investigation · **Status:** validated (1 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
 
-The largest group on `win-workstation` is the interesting one: **14 items on `platform = "claude_code"`
-with `marketplace` unset** (access, agent-development, build-mcp-server,
-claude-automation-recommender, hook-development, playground, plugin-settings, skill-development, …).
-**That is the agentic surface, and it is invisible to any query that keys on `marketplace`.** Also
-present: 5 `vsc` extensions, 3 `chrome`, 3 `software_windows`, 1 `pypi`.
 
-**False positives.** It nets to state only *within the query timeframe*: an item installed before the
-window and never touched again has no row inside it and will be missing entirely. This is the single
-most likely way to get a wrong answer from this query.
+For the war-room summary: one line per host that has ever seen this item.
 
----
 
-## D3b — Recent supply-chain changes on a host, classified
+_Parameters:_ Same item_key / item_name as D1. Worked example: "octocat/Hello-World". Timeframe 30d.
 
-**Purpose:** investigation
-**Datasets:** `koi_koi_raw` (Audit only)
-**Question:** What has changed on this device recently, and how much of it touches an agent or IDE
-surface?
-**Provenance:** `VALIDATED (agent), 85 rows` (7d)
-**Parameters:** `// PARAM: koi_host`, `// PARAM: lookback` (set on the query timeframe).
 
-```
-// Theme D / D3b - Recent supply-chain changes on a host, classified.
-// The narrative feed for a device investigation: change_class says what kind of change it
-// was, agentic_surface says whether it touched an agent/IDE surface or is just Chrome
-// updating itself.
-// Verified action vocabulary on this tenant: installed, updated, uninstalled, archived,
-// unarchived, remediation_opened, remediation_executed, remediation_pending, created,
-// allowlist_items_added, enabled, disabled, email_sent - plus approval_requests rows where
-// action is NULL, which is why the if-chain ends in "other".
-// PARAM: koi_host = inputs.hostname
-// PARAM: lookback = set on the query timeframe (7d in the worked example)
-// Investigation.
-dataset = koi_koi_raw
-| filter source_log_type = "Audit"
-| filter hostname = "win-workstation"                                  // PARAM: koi_host
-| alter change_class = if(type = "remediation", "remediation",
-                       if(action in ("installed", "updated"), "acquisition",
-                       if(action = "uninstalled", "removal", "other")))
-| alter agentic_surface = if(platform in ("claude_code", "vsc", "cursor", "jet", "npp"), "agent_or_ide",
-                          if(platform in ("chrome", "edge"), "browser", "os_package"))
-| fields _time, change_class, agentic_surface, action, type, object_name, object_id,
-         item_version, marketplace, platform, category, triggered_by, message
-| sort desc _time
-| limit 300
-```
-
-**Interpretation.** The narrative feed for a device investigation. Two derived columns do the work:
-`change_class` (acquisition / removal / remediation / other) and `agentic_surface` (agent_or_ide /
-browser / os_package), so an analyst sees at a glance whether the week's churn is Chrome updating
-itself or an agent surface moving. 85 rows over 7d on `win-workstation`, spanning `claude_code` skill
-removals, `vsc` extension installs, GitHub repo acquisition and Windows package updates.
-
-**False positives.** The `agentic_surface` platform lists are a closed enumeration taken from this
-tenant. A platform value not in either list falls to `os_package`, which will silently mislabel a new
-agent surface. Re-derive the lists periodically with `comp count() by platform`.
-
----
-
-## D1b — Item history rolled up per host
-
-**Purpose:** investigation (war-room summary block)
-**Datasets:** `koi_koi_raw` (Audit only)
-**Question:** One line per host that has ever seen this item.
-**Provenance:** `VALIDATED (agent), 1 row` for the worked example
-**Parameters:** same as D1.
-
-```
-// Theme D / D1b - Item history rolled up per host, for a war-room summary block.
-// Same PARAMs as D1. `values()` emits a deduplicated array per group, so versions_seen
-// doubles as a version-drift indicator without a second query.
-// Investigation. Suggested timeframe 30d.
+```sql
+// KOI Ext - Investigate Item, war-room summary block. Same PARAMs as D1.
 dataset = koi_koi_raw
 | filter source_log_type = "Audit" and type in ("extensions", "remediation")
 | filter object_id = "octocat/Hello-World" or object_name = "octocat/Hello-World"   // PARAM
@@ -1685,284 +1585,451 @@ dataset = koi_koi_raw
 | limit 200
 ```
 
-**Interpretation.** Collapses D1 into something a playbook can paste into a war-room note.
-`versions_seen` doubles as a version-drift indicator without a second query. `triggered_by` is `"Koi"`
-for everything agent-discovered — **a human or API actor in that column is itself worth reading.**
 
-**False positives.** Same name-collision caveat as D1. `first_seen` is bounded by the query timeframe,
-not by when the item genuinely first appeared, so an item present before the retention window looks
-younger than it is.
+_Interpretation:_ Collapses D1 into something a playbook can paste into a war-room note or a markdown table. Returned one row: win-workstation, first_seen 1784627286000, last_seen 1784628345000, koi_events 2, actions_seen [installed, uninstalled], versions_seen [7fd1a60b…], triggered_by_actors [Koi]. `values()` is what makes this work — it emits a deduplicated array per group, so versions_seen doubles as a version-drift indicator without a second query. triggered_by is "Koi" for everything agent-discovered; a human or API actor there is itself worth reading.
 
----
 
-## B11 — KOI's agentic supply-chain churn
+_False positives:_ Same name-collision caveat as D1. Also note first_seen is bounded by the query timeframe, not by when the item genuinely first appeared — an item present before the retention window looks younger than it is.
 
-**Purpose:** investigation
-**Datasets:** `koi_koi_raw` (Audit only)
-**Question:** What AI tooling is being installed, updated and removed across the estate?
-**Provenance:** `Not validated by originating agent` — **needs re-run.**
-**Parameters:** none; extend the `agentic_class` classifier as needed.
 
-```
-// Theme B / B11 - KOI's agentic supply-chain churn: what AI tooling is being installed,
-// updated and removed across the estate, from the Audit stream.
-// Audit is NOT duplicated (1.0 ratio) - one row per real change, so count() is safe here.
-// This is the KOI-only baseline that B8 and B9 are measured against.
-// Investigation.
-dataset = koi_koi_raw
-| filter source_log_type = "Audit" and type = "extensions"
-| alter nm = lowercase(coalesce(object_name, ""))
-| alter agentic_class = if(
-      nm contains "mcp" or nm contains "modelcontextprotocol",             "mcp_server",
-      nm contains "claude" or nm contains "anthropic",                     "claude_tooling",
-      nm contains "copilot",                                              "copilot_tooling",
-      nm contains "cursor" or nm contains "windsurf" or nm contains "antigravity", "agentic_ide",
-      nm contains "openai" or nm contains "chatgpt" or nm contains "codex", "openai_tooling",
-      nm contains "ollama" or nm contains "llama" or nm contains "llm",     "local_model_runtime",
-      nm contains "langchain" or nm contains "langgraph" or nm contains "llamaindex"
-        or nm contains "crewai" or nm contains "autogen",                   "agent_framework",
-      nm contains "agent" or nm contains "subagent",                        "agent_named_item",
-      null)
-| filter agentic_class != null
-// marketplace is null for Claude Code skills/plugins on this tenant - keep them, label them.
-| alter source = coalesce(marketplace, "local_agent_config")
-| comp count() as events,
-       count_distinct(hostname) as devices,
-       count_distinct(item_version) as versions,
-       min(_time) as first_seen,
-       max(_time) as last_seen
-   by agentic_class, source, object_name, action
-| sort desc devices, desc events
-```
+### D2 — XDR runtime evidence for a KOI item
 
-**Interpretation.** The KOI-only baseline that B8 and B9 are measured against, and the answer to "what
-agentic software does the org own" independent of whether any of it ran. `count()` is safe here because
-Audit is not duplicated. Known KOI-side agentic inventory includes `@playwright/mcp` (18 `installed`
-events, marketplace `npm`), `@idletoaster/ssh-mcp-server`, `chrome-devtools-mcp` and
-`localhost/cortex-mcp` (docker).
+**Purpose:** investigation · **Status:** validated (8 rows on this tenant) · **Datasets:** xdr_data (PROCESS, FILE, LOAD_IMAGE)
 
-**False positives.** `nm contains "agent"` is very broad — "user-agent", "agent-development",
-"AgentRansack" all match. The `agent_named_item` class is a catch-all and should be read as a hunting
-bucket, not a finding. Ordering matters in the `if` chain: an item named both `mcp` and `claude`
-classifies as `mcp_server`.
 
----
+KOI says this item is installed — did anything from it actually execute, load, or get written to disk, and what brought it here?
 
-# Appendix A — Structurally valid but quiet on this tenant
 
-Nobody should think these are broken.
+_Parameters:_ item_token — a distinctive lowercase substring of the item (package name, extension id, repo name), from KoiContext.package_name or item_id. koi_host — KoiContext.alert_hostname or Koi.Inventory.Endpoint.hostname; delete that filter line to search fleet-wide. Worked example: item_token "hello-world", host "win-workstation", 24h.
 
-| Query | What is quiet, and why |
-|---|---|
-| **A1, A2, A6** | `yarn`, `pnpm`, `choco`, `winget`, `brew`, `go`, `cargo`, `gem` match nothing in 7d — those package managers are simply not installed here. `pip`, `uv`, `npm`/`npx`, `git`, `curl`, `Invoke-WebRequest` and `msiexec` are present and produce all the rows. The absent tools are kept so the queries travel. |
-| **B0, B2, B3** | `cursor`, `windsurf`, `codex`, `aider` and `gemini-cli` match nothing — not deployed here. **B2 returns zero over 24h and 8 rows over 7d**: MCP spawns are bursty and the last burst was ~4 days old. Zero on 24h means "no agent session ran today". |
-| **B1, B4** | `ollama app.exe` is invisible to PROCESS-name probes because it is a long-running service whose start fell outside the window. It shows up in B4 (NETWORK) and B6 (FILE). Any PROCESS-name-only agent inventory under-reports resident runtimes. |
-| **A5, A6, A3, C6** | The **dual-covered host population on this tenant is exactly one: `win-workstation`.** All other KOI hosts belong to different orgs on a shared Koi SaaS tenant and have no Cortex agent; all other XDR hosts have no KOI. Coverage-gap results are therefore near-empty *or*, if you do not filter to dual-covered hosts, catastrophically over-reported. This is a tenant artefact, not a product finding. |
-| **A7, C3, C5** | Only `win-workstation` runs the KOI agent, so scan-freshness returns exactly one host. Three of four XDR hosts have never run a KOI scan — again dominated by tenant-sharing. |
-| **KOI Alerts, host attribution** | `hostname` is NULL on **every** Alerts row (797/7d). Any host-scoped query against Alerts returns nothing. Use `resources[type=device].data.hostname`, or restrict host-scoped work to Audit. |
-| **`C:\ProgramData\Koi\` in FILE telemetry** | Returns 0 rows over 24h. Confirmed true negative — the same regex style returns thousands of rows against `AppData\Local\Koi`. There is no second KOI freshness signal in FILE. |
 
----
-
-# Appendix B — Pending validation
-
-These are the highest-concept queries in the set and the ones most worth running first after quota
-reset. **None has ever been executed successfully in the form printed here.** They are separated from
-the main library rather than dropped, because the ideas are sound and the defects are identified.
-
-## B8 — KOI risk ∩ XDR execution *(corrected — needs re-run)*
-
-**Purpose:** detection. **Datasets:** `xdr_data` (PROCESS) + `koi_koi_raw` (Alerts).
-**Why it matters most:** KOI alone says *you own something dangerous*. XDR alone says *something ran*.
-Only the intersection says *the dangerous thing is live on this host, right now*.
-
-**What was wrong:** (1) `koi.koi_risk` and five other alias-prefixed references in `alter`/`fields` —
-fails with `unknown field`, asynchronously. (2) `to_json_string(resources)` double-encodes an
-already-JSON-string column, silently nulling every extraction. (3) JSONPath written `$.0.type`;
-Theme D proved `$[0].type` is the accepted form. All three corrected below.
-**Alerts dedupe: present and correct** — `dedup koi_event_id` on
-`json_extract_scalar(metadata, "$.notification_event_id")` before any aggregation.
-
-```
-// Theme B / B8 - RISK THAT IS NOT THEORETICAL.
-// A KOI-scored MCP server or agentic package that is ALSO observed EXECUTING in XDR endpoint
-// telemetry. KOI alone says "you own something dangerous". XDR alone says "something ran".
-// Only the intersection says "the dangerous thing is live on this host, right now".
-// Detection - the highest-value query in the Theme B set.
+```sql
+// KOI Ext - Investigate Item, new step "XDR runtime evidence".
+// Bridges "KOI says it is installed" to "it actually ran / was written to disk".
+// PARAM: item_token  = a distinctive substring of the item - package name, extension id, repo name.
+//                      From KoiContext.package_name / item_id, lowercased.
+// PARAM: koi_host    = KoiContext.alert_hostname / Koi.Inventory.Endpoint.hostname. Drop the line to search fleet-wide.
 dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-| alter
-    cmd  = lowercase(coalesce(action_process_image_command_line, "")),
-    proc = lowercase(coalesce(action_process_image_name, ""))
-| filter proc in ("node", "node.exe", "npx", "npx.cmd", "env", "python", "python.exe",
-                  "python3", "python3.12", "python3.13", "uv", "uvx", "uv.exe", "uvx.exe",
-                  "bun", "deno", "docker", "podman")
-| filter cmd ~= "[/@\-]mcp([\-/@\s\"']|$)" or cmd ~= "mcp-server" or cmd contains "modelcontextprotocol"
-| alter mcp_entrypoint = arrayindex(regextract(cmd, "([@a-z0-9._/\-]*[/@\-]mcp[a-z0-9._/@\-]*)"), 0)
-// Normalise the executed entrypoint to the bare package name KOI would inventory:
-//   "@playwright/mcp@latest"                     -> "@playwright/mcp"   (stop at the @version)
-//   ".../node_modules/.bin/playwright-mcp"       -> "playwright-mcp"    (last path segment)
-//   "start-mcp-server"                           -> "start-mcp-server"
-| alter exec_pkg = if(mcp_entrypoint contains "/node_modules/" or mcp_entrypoint contains "/bin/",
-        arrayindex(regextract(mcp_entrypoint, "([^/]+)$"), 0),
-        arrayindex(regextract(mcp_entrypoint, "^(@?[a-z0-9._\-]+/?[a-z0-9._\-]*)"), 0))
-| comp count() as spawns, min(_time) as first_exec, max(_time) as last_exec
-   by agent_hostname, causality_actor_process_image_name, exec_pkg
-// KOI's verdict for the same package. Alerts carry the scored inventory in resources[0],
-// as either an `mcp` resource (MCP servers) or an `item` resource (everything else);
-// both expose data.package_name and data.risk_level, so handle them together.
-| join type = inner (
-      dataset = koi_koi_raw
-      | filter source_log_type = "Alerts"
-      | alter res = resources
-      | alter r0type = json_extract_scalar(res, "$[0].type")
-      | filter r0type = "mcp" or r0type = "item"
-      // MANDATORY: the integration re-sends every open alert each 1-minute fetch cycle
-      // (~245x duplication). Dedupe on the notification event id, never on _id.
-      | alter koi_event_id = json_extract_scalar(metadata, "$.notification_event_id")
-      | dedup koi_event_id
-      | alter
-          koi_pkg       = lowercase(json_extract_scalar(res, "$[0].data.package_name")),
-          koi_risk      = json_extract_scalar(res, "$[0].data.risk_level"),
-          koi_market    = json_extract_scalar(res, "$[0].data.marketplace"),
-          koi_transport = json_extract_scalar(res, "$[0].data.transport"),
-          koi_res_type  = r0type,
-          koi_device    = json_extract_scalar(res, "$[1].data.hostname")
-      | comp count_distinct(koi_device) as koi_devices, max(_time) as koi_last_alert
-         by koi_pkg, koi_risk, koi_market, koi_transport, koi_res_type
-  ) as koi koi.koi_pkg = exec_pkg
-| alter verdict = if(
-      koi_risk = "critical" or koi_risk = "high", "CONFIRMED_RISK_EXECUTING",
-      koi_risk = "medium",                        "MEDIUM_RISK_EXECUTING",
-      koi_risk = "pending",                       "UNSCORED_BUT_EXECUTING",
-                                                  "SCORED_LOW_EXECUTING")
-| fields agent_hostname, causality_actor_process_image_name, exec_pkg, verdict,
-         koi_risk, koi_res_type, koi_transport, koi_market,
-         koi_devices, koi_last_alert, spawns, first_exec, last_exec
-| sort desc spawns
-```
-
-**Expected shape.** `@playwright/mcp` is known to appear on *both* sides — 18 `installed` events in
-KOI's Audit stream and 256 observed executions in XDR — so an equivalent match should resolve if the
-Alerts-side extraction works. KOI's `mcp` resources also inventory
-`https://agent.robinhood.com/mcp/trading` (remote, http transport, `risk_level` `pending`) on
-"Greg's Mac mini" and `mcp-server` (local, stdio, homebrew) on M-DQ3HT4R1P7 — but neither host has a
-Cortex agent, so those will not join. **Run over 7d.**
-
-**Known risk if it still returns nothing:** the `inner` join requires `exec_pkg` to equal
-`koi_pkg` exactly. KOI's `package_name` for `@playwright/mcp@latest` may or may not carry the
-`@latest` suffix or the scope. Probe both sides' distinct values before concluding the query is wrong.
-
-## B9 — Shadow MCP: executing on an endpoint, not in KOI *(corrected — needs re-run)*
-
-**Purpose:** detection. **Datasets:** `xdr_data` (PROCESS) + `koi_koi_raw` (Audit).
-**What was wrong:** the same alias-prefix defect (`koi.koi_pkg`, `koi.koi_audit_events`,
-`koi.koi_last_seen`) in `alter` and `fields`. Corrected. No Alerts involvement, so no dedupe needed.
-
-```
-// Theme B / B9 - Shadow MCP: an MCP server EXECUTING on an endpoint that KOI has not
-// inventoried. KOI is run-on-demand on Windows - no resident agent - so a server installed
-// and used between two scans is invisible on the supply-chain side while fully visible in
-// endpoint telemetry. This is the coverage-gap detection neither dataset can produce alone.
-// Detection.
-dataset = xdr_data
-| filter event_type = ENUM.PROCESS
-| alter
-    cmd  = lowercase(coalesce(action_process_image_command_line, "")),
-    proc = lowercase(coalesce(action_process_image_name, ""))
-| filter proc in ("node", "node.exe", "npx", "npx.cmd", "env", "python", "python.exe",
-                  "python3", "python3.12", "python3.13", "uv", "uvx", "uv.exe", "uvx.exe",
-                  "bun", "deno", "docker", "podman")
-| filter cmd ~= "[/@\-]mcp([\-/@\s\"']|$)" or cmd ~= "mcp-server" or cmd contains "modelcontextprotocol"
-| alter mcp_entrypoint = arrayindex(regextract(cmd, "([@a-z0-9._/\-]*[/@\-]mcp[a-z0-9._/@\-]*)"), 0)
-| alter exec_pkg = if(mcp_entrypoint contains "/node_modules/" or mcp_entrypoint contains "/bin/",
-        arrayindex(regextract(mcp_entrypoint, "([^/]+)$"), 0),
-        arrayindex(regextract(mcp_entrypoint, "^(@?[a-z0-9._\-]+/?[a-z0-9._\-]*)"), 0))
-| comp count() as spawns, min(_time) as first_exec, max(_time) as last_exec
-   by agent_hostname, causality_actor_process_image_name, exec_pkg
-// LEFT join against everything KOI knows about, from BOTH streams:
-// Audit object_name (the reliable, non-duplicated install/update record) and the scored
-// Alerts inventory. A null right side means KOI has never seen this package at all.
-| join type = left (
-      dataset = koi_koi_raw
-      | filter source_log_type = "Audit" and object_type = "item"
-      | alter koi_pkg = lowercase(object_name)
-      | comp count() as koi_audit_events, max(_time) as koi_last_seen by koi_pkg
-  ) as koi koi.koi_pkg = exec_pkg
-| alter koi_coverage = if(koi_pkg = null, "SHADOW_MCP_NOT_IN_KOI", "KNOWN_TO_KOI")
-| fields agent_hostname, causality_actor_process_image_name, exec_pkg, koi_coverage,
-         koi_audit_events, koi_last_seen, spawns, first_exec, last_exec
-| sort asc koi_coverage, desc spawns
-```
-
-**Caveat.** The comment claims a join against *both* KOI streams; the query only joins Audit. That is
-the safer choice (Audit needs no dedupe) but the comment overstates it. **Also: this joins on
-package name with no host predicate**, so an MCP server inventoried by KOI on a *different org's*
-host will read as `KNOWN_TO_KOI` here. On a shared SaaS tenant that materially understates the shadow
-set. Add `and koi.koi_host = agent_hostname` if you want per-host truth. **Run over 7d.**
-
-## B7 — KOI's MCP server inventory from Alerts *(corrected — needs re-run)*
-
-**Purpose:** investigation. **Datasets:** `koi_koi_raw` (Alerts).
-**Alerts dedupe: present and correct.** Same `to_json_string` / JSONPath corrections as B8. Theme B
-claimed this validated; Theme D's independently tested JSONPath rules say the original form should
-not have worked. **Run both forms and settle it.**
-
-```
-// Theme B / B7 - KOI's MCP server inventory, deduplicated, with its risk verdict.
-// KOI does not ship MCP servers as their own event type. They arrive as an `mcp` RESOURCE
-// inside an OCSF-ish alert: resources[0] is the MCP server, resources[1] is the device.
-// CRITICAL: the integration re-sends every still-open alert on each 1-minute fetch cycle
-// (~245x duplication over 24h). Dedupe on metadata.notification_event_id - never count()
-// rows, never dedupe on _id. finding_info.uid is the POLICY id, not an alert id.
-// Investigation.
-dataset = koi_koi_raw
-| filter source_log_type = "Alerts"
-| alter res = resources
-| filter json_extract_scalar(res, "$[0].type") = "mcp"
-| alter evid = json_extract_scalar(metadata, "$.notification_event_id")
-| dedup evid
-| fields evid, message, risk_level, severity, res
+| filter event_type in (ENUM.PROCESS, ENUM.FILE, ENUM.LOAD_IMAGE)
+| filter agent_hostname = "win-workstation"                          // PARAM
+| alter artifact_path = coalesce(action_process_image_path, action_file_path, action_module_path)
+| alter cmdline       = action_process_image_command_line
+| filter lowercase(coalesce(artifact_path, "")) contains "hello-world"
+      or lowercase(coalesce(cmdline, ""))       contains "hello-world"     // PARAM item_token (lowercase)
+| alter evidence_kind = if(event_type = ENUM.PROCESS, "executed",
+                        if(event_type = ENUM.LOAD_IMAGE, "loaded_as_module", "written_to_disk"))
+| fields _time, agent_hostname, evidence_kind, event_type, artifact_path, cmdline,
+         action_process_image_name, action_process_username, action_process_signature_status,
+         actor_process_image_name, actor_process_command_line
+| sort asc _time
 | limit 200
 ```
 
-## C6 — Cortex-managed host population *(reconstructed — needs re-run)*
 
-**Purpose:** investigation. **Datasets:** `xdr_data`.
-The denominator for any coverage-gap calculation. Diff against A7/C3 (hosts running KOI scans) to get
-the supply-chain blind spot. The originating agent's exact text was not persisted; this is a minimal
-rebuild from its description.
+_Interpretation:_ This is the query that turns a KOI inventory fact into an incident. It recovered the exact acquisition of octocat/Hello-World: `"C:\Program Files\Git\cmd\git.exe" clone --depth 1 https://github.com/octocat/Hello-World.git C:\Users\amahmoud\Documents\koi-test-repo`, running as NT AUTHORITY\SYSTEM, with actor_process_image_name = cortex-xdr-payload.exe — the full causality chain from the driving process down through git.exe → git remote-https → git-remote-https.exe, four minutes before KOI reported the install at 1784627286000. That four-minute gap is the KOI scan latency made visible. `action_m
 
+
+_False positives:_ Substring matching is blunt. Short or generic tokens ("pip", "build", "access", "npm") will match unrelated paths; prefer the longest distinctive fragment available. A hit in cmdline only, with no matching artifact_path, means something mentioned the item rather than ran it — the git-clone rows are exactly that shape and are still the answer you want, so read evidence_kind together with who the ac
+
+
+### D3 — Host agentic supply-chain posture by marketplace
+
+**Purpose:** investigation · **Status:** validated (7 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+Given a host, what is currently on it, broken down by marketplace and platform?
+
+
+_Parameters:_ koi_host = inputs.hostname (KOI Ext - Investigate Device). Worked example: "win-workstation", 30d.
+
+
+```sql
+// KOI Ext - Investigate Device, step "supply-chain posture by marketplace".
+// dedup keeps only the LATEST audit row per item, so install/uninstall churn nets out.
+// PARAM: koi_host = inputs.hostname
+dataset = koi_koi_raw
+| filter source_log_type = "Audit" and type = "extensions"
+| filter hostname = "win-workstation"                                 // PARAM
+| dedup object_id, marketplace by desc _time
+| filter action != "uninstalled"
+| alter marketplace_event_vocab = coalesce(marketplace, "<unset>")
+| comp count()               as items_present,
+       values(object_name)   as item_names,
+       max(_time)            as latest_change
+     by marketplace_event_vocab, platform
+| sort desc items_present
+| limit 50
 ```
-// Theme C / C6 - Cortex-managed host population from telemetry.
-// RECONSTRUCTED - the originating agent's exact text was not persisted. NOT re-validated.
-// PARAM: timeframe defines what "recent" means
+
+
+_Interpretation:_ The device-side entry point the Marketplace pack cannot provide — there is no koi-devices-list and no koi-device-inventory-get in 1.2.3, and no Koi.Device.* context at all, so a hostname cannot be turned into an inventory through the API. This does it from events. The `dedup object_id, marketplace by desc _time` then `filter action != "uninstalled"` pair is the whole trick: it nets install/update/uninstall churn down to present-tense state. On win-workstation it returned 7 marketplace/platform pairs, and the largest is the interesting one — 14 items on platform "claude_code" with marketplace u
+
+
+_False positives:_ Nets to state only within the query timeframe: an item installed before the window and never touched again has no row inside it and will be missing. Run at 30d or longer for posture, not 24h. marketplace "<unset>" is not an error — claude_code items genuinely carry no marketplace, and `built_in`/`side_loaded` seen elsewhere are installation methods leaking into the field, not marketplaces.
+
+
+### D3b — Recent supply-chain changes on a host, classified
+
+**Purpose:** investigation · **Status:** validated (85 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+What has changed on this device recently, and how much of it touches an agent or IDE surface?
+
+
+_Parameters:_ koi_host = inputs.hostname. Lookback is set by the query timeframe. Worked example: "win-workstation", 7d.
+
+
+```sql
+// KOI Ext - Investigate Device, step "recent supply-chain changes on this device".
+// PARAM: koi_host  = inputs.hostname
+// PARAM: lookback  = set on the query timeframe (7d used in the worked example)
+dataset = koi_koi_raw
+| filter source_log_type = "Audit"
+| filter hostname = "win-workstation"                                  // PARAM
+| alter change_class = if(type = "remediation", "remediation",
+                       if(action in ("installed", "updated"), "acquisition",
+                       if(action = "uninstalled", "removal", "other")))
+| alter agentic_surface = if(platform in ("claude_code", "vsc", "cursor", "jet", "npp"), "agent_or_ide",
+                          if(platform in ("chrome", "edge"), "browser", "os_package"))
+| fields _time, change_class, agentic_surface, action, type, object_name, object_id,
+         item_version, marketplace, platform, category, triggered_by, message
+| sort desc _time
+| limit 300
+```
+
+
+_Interpretation:_ The narrative feed for a device investigation. Two derived columns do the work: change_class (acquisition / removal / remediation / other) and agentic_surface (agent_or_ide / browser / os_package), so an analyst can see at a glance whether the week's churn is Chrome updating itself or an agent surface moving. 85 rows over 7d on win-workstation, spanning claude_code skill removals, vsc extension installs, github repo acquisition and Windows package updates. The full verified action vocabulary across the tenant is: installed, updated, uninstalled, archived, unarchived, remediation_opened, remedi
+
+
+_False positives:_ The agentic_surface mapping is a judgement call encoded in the query, not a field KOI emits — `npp` (Notepad++) and `jet` (JetBrains) are grouped as agent_or_ide because they are plugin hosts. Adjust the lists to your definition. Rows with hostname NULL are org-level and are excluded by the host filter by design.
+
+
+### D3c — When did KOI last actually scan this device?
+
+**Purpose:** both · **Status:** validated (2 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+Is silence from KOI on this host evidence of no change, or evidence of no scan?
+
+
+_Parameters:_ koi_host = inputs.hostname; delete the filter for a fleet-wide coverage sweep. Worked example: "win-workstation", 24h.
+
+
+```sql
+// KOI Ext - Investigate Device, step "when did KOI last actually scan this device?".
+// KOI is run-on-demand on Windows: no resident agent, so absence of KOI events means
+// "no scan ran", not "nothing changed". The bundled interpreter under ...\Local\Koi\Python
+// makes the scan itself visible in XDR, which is the only way to tell the two apart.
+// PARAM: koi_host = inputs.hostname  (drop the filter for a fleet-wide coverage sweep)
 dataset = xdr_data
-| comp count() as n, min(_time) as first_seen, max(_time) as last_seen by agent_hostname
-| sort desc n
+| filter event_type = ENUM.PROCESS
+| filter agent_hostname = "win-workstation"                            // PARAM
+| filter actor_process_image_path contains "Koi" or action_process_image_path contains "Koi"
+| comp max(_time)                            as last_koi_agent_activity,
+       min(_time)                            as first_koi_agent_activity,
+       count()                               as processes_spawned_by_koi,
+       count_distinct(action_process_causality_id) as scan_causality_chains,
+       values(action_process_image_name)     as koi_child_processes
+     by agent_hostname
 | limit 100
 ```
 
-**Note.** `dataset = endpoints` is usable on this tenant but flaky: `comp count()` returns in seconds,
-but any `comp ... by <field>` or `| fields <list>` against it timed out repeatedly at 240s+. Derive the
-host population from `xdr_data` telemetry, as above, rather than from `endpoints`.
+
+_Interpretation:_ Neither dataset can answer this alone, which is what makes it worth having. KOI is run-on-demand on Windows — no service, no resident process — so an empty koi_koi_raw for a host is ambiguous. But KOI bundles its own interpreter at C:\Users\Default\AppData\Local\Koi\Python\WPy64-31290\python\python.exe, and every discovery probe it forks is an ordinary PROCESS event, so the scan itself is observable in XDR. On win-workstation: last_koi_agent_activity 1784628070884, 1426 processes spawned across 2 causality chains, children [cmd.exe, python.exe]. The probes are recognisable in the raw rows — Ge
+
+
+_False positives:_ The path match is the bare token "Koi", chosen because escaped backslash literals in `contains` proved fragile in XQL (`contains "\\Koi\\"` is a parse error at the tenant). Any path containing that substring matches — on a Mac fleet, or a host with an unrelated "Koi" directory, tighten to `contains "Local\\Koi"` and verify it parses first. macOS/Linux hosts use a different KOI layout and will not 
+
+
+### D4 — Host acquisition timeline — two lanes on one clock
+
+**Purpose:** investigation · **Status:** validated (30 rows on this tenant) · **Datasets:** koi_koi_raw (Audit) UNION xdr_data (PROCESS)
+
+
+On this host, in this window, what arrived and which process brought it?
+
+
+_Parameters:_ koi_host — must be the same string in both lanes; KOI's hostname and XDR's agent_hostname agree on win-workstation but this is not guaranteed fleet-wide. Window is the query timeframe. Worked example: "win-workstation", 24h.
+
+
+```sql
+// KOI Ext - Alert Triage, war-room summary step "acquisition timeline for this host".
+// Two lanes on one clock: what KOI says arrived, and which process was running when it did.
+// PARAM: koi_host = KoiContext.alert_hostname (must equal xdr_data.agent_hostname)
+// PARAM: window   = the query timeframe (24h in the worked example)
+dataset = koi_koi_raw
+| filter source_log_type = "Audit" and type = "extensions"
+| filter hostname = "win-workstation"                                   // PARAM
+| filter action in ("installed", "updated")
+| alter lane = "1_KOI_SAYS_ARRIVED"
+| alter what = concat(object_name, " @", coalesce(item_version, "?"))
+| alter how  = concat(coalesce(marketplace, "<unset>"), " / ", coalesce(platform, "?"))
+| alter who  = coalesce(triggered_by, "-")
+| fields _time, lane, what, how, who
+| union
+(dataset = xdr_data
+ | filter event_type = ENUM.PROCESS
+ | filter agent_hostname = "win-workstation"                            // PARAM (same host)
+ | filter action_process_image_name in ("pip.exe", "pip3.exe", "npm.exe", "npx.exe", "node.exe",
+                                        "git.exe", "curl.exe", "wget.exe", "winget.exe",
+                                        "msiexec.exe", "choco.exe", "code.exe", "cursor.exe")
+ // drop Electron/Chromium helper processes - they are not acquisition, just IDE internals
+ | filter action_process_image_command_line not contains "--type="
+ | alter lane = "2_XDR_BROUGHT_IT"
+ | alter what = coalesce(action_process_image_command_line, action_process_image_name)
+ | alter how  = concat(coalesce(actor_process_image_name, "?"), " -> ", coalesce(action_process_image_name, "?"))
+ | alter who  = coalesce(action_process_username, "-")
+ | fields _time, lane, what, how, who)
+| sort asc _time
+| limit 400
+```
+
+
+_Interpretation:_ Built for the Alert Triage war-room summary. Both datasets are projected onto the same four columns (_time, lane, what, how, who) and unioned, so a single result set reads as one interleaved narrative: lane 1_KOI_SAYS_ARRIVED gives "octocat/Hello-World @7fd1a60b… — github / git — Koi" and "ms-toolsai.vscode-jupyter-cell-tags @0.1.9 — vsc / vsc", while lane 2_XDR_BROUGHT_IT gives the git clone with `cortex-xdr-payload.exe -> git.exe` as the causality and NT AUTHORITY\SYSTEM as the user. 30 rows on win-workstation over 24h. The `not contains "--type="` filter is load-bearing: without it Code.exe
+
+
+_False positives:_ The installer allowlist is the tuning surface. code.exe and cursor.exe are included because IDE extension installs go through them, but they are also just the editor running; git.exe appears for `git --version` probes as much as for clones. Read the `what` column, not just the presence of a row. The lanes are correlated only by time and host — this query asserts adjacency, never causation.
+
+
+### D5 — Alert in context — the hour either side, three lanes
+
+**Purpose:** investigation · **Status:** validated (100 rows on this tenant) · **Datasets:** koi_koi_raw (Audit) UNION xdr_data (PROCESS) UNION xdr_data (NETWORK)
+
+
+For this one deduplicated alert, what else was happening on the host at the time?
+
+
+_Parameters:_ alert_host = KoiContext.alert_hostname (extracted from resources[type=device].data.hostname — the top-level hostname column is NULL on every Alerts row). alert_time_ms = the surviving alert's _time in epoch milliseconds, substituted into all three to_timestamp() calls. radius_min = the abs() bound, 60 below. Worked example: "win-workstation", 1784627286000, ±60min, 24h.
+
+
+```sql
+// KOI Ext - Alert Triage, step "what else happened around this alert".
+// The alert is deduped upstream on metadata.notification_event_id - this takes the ONE
+// surviving alert's host and time and rebuilds the hour either side of it.
+// PARAM: alert_host    = KoiContext.alert_hostname (resources[type=device].data.hostname)
+// PARAM: alert_time_ms = the alert _time, epoch MILLISECONDS
+// PARAM: radius_min    = +/- minutes (60 below)
+dataset = koi_koi_raw
+| filter source_log_type = "Audit"
+| filter hostname = "win-workstation"                                        // PARAM
+| alter mins_from_alert = timestamp_diff(_time, to_timestamp(1784627286000, "MILLIS"), "MINUTE")  // PARAM
+| filter abs(mins_from_alert) <= 60
+| alter lane   = "KOI_SUPPLY_CHAIN"
+| alter detail = coalesce(message, concat(coalesce(action, "?"), " ", coalesce(object_name, "?")))
+| fields _time, mins_from_alert, lane, detail
+| union
+(dataset = xdr_data
+ | filter event_type = ENUM.PROCESS
+ | filter agent_hostname = "win-workstation"                                 // PARAM
+ | alter mins_from_alert = timestamp_diff(_time, to_timestamp(1784627286000, "MILLIS"), "MINUTE")  // PARAM
+ | filter abs(mins_from_alert) <= 60
+ | alter lane   = if(actor_process_image_path contains "Koi", "KOI_AGENT_SCAN", "XDR_EXECUTION")
+ | alter detail = coalesce(action_process_image_command_line, action_process_image_name)
+ | fields _time, mins_from_alert, lane, detail)
+| union
+(dataset = xdr_data
+ | filter event_type = ENUM.NETWORK
+ | filter agent_hostname = "win-workstation"                                 // PARAM
+ // only egress from processes that can pull code - browsers/telemetry are noise here
+ | filter actor_process_image_name in ("git.exe", "pip.exe", "pip3.exe", "npm.exe", "npx.exe",
+                                       "node.exe", "curl.exe", "wget.exe", "python.exe",
+                                       "winget.exe", "msiexec.exe")
+ | alter mins_from_alert = timestamp_diff(_time, to_timestamp(1784627286000, "MILLIS"), "MINUTE")  // PARAM
+ | filter abs(mins_from_alert) <= 60
+ | alter lane   = "XDR_EGRESS"
+ | alter detail = concat(coalesce(actor_process_image_name, "?"), " -> ",
+                         coalesce(action_remote_ip, "?"), ":", to_string(action_remote_port),
+                         " (", coalesce(action_country, "?"), ")")
+ | fields _time, mins_from_alert, lane, detail)
+| sort asc _time
+| limit 500
+```
+
+
+_Interpretation:_ Alert-in-context for Alert Triage. Every row carries mins_from_alert as a signed offset, so the analyst reads the hour as a relative timeline rather than absolute epochs. Four lanes emerge: KOI_SUPPLY_CHAIN (what KOI recorded), KOI_AGENT_SCAN (processes whose actor path contains Koi — the scan that produced the alert, separated out so it is not mistaken for adversary activity), XDR_EXECUTION (everything else that ran) and XDR_EGRESS (network from code-pulling processes only). Note the timestamp arithmetic: `to_timestamp(<ms> - 3600000, ...)` is a parse error at the tenant, so the window is bui
+
+
+_False positives:_ Still noisy in the XDR_EXECUTION lane by construction — the worked example shows GoogleUpdater and TrustedInstaller and secedit, which is normal Windows housekeeping. That is the intended behaviour of "everything else that happened", but it is why the 500-row cap matters. Narrow radius_min before narrowing the lanes. Requires the KOI hostname and the XDR agent_hostname to be the same string.
+
+
+### D6 — Blast radius for an item, with remediation and policy status
+
+**Purpose:** investigation · **Status:** validated (8 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+Which hosts have this item, and has it already been remediated or listed by policy?
+
+
+_Parameters:_ item_key / item_name = inputs.item_id from KOI Ext - Block and Remediate. Worked example: "anthropic.claude-code", 30d.
+
+
+```sql
+// KOI Ext - Block and Remediate, pre-block step "who else has this item, and is it already handled".
+// PARAM: item_key  = inputs.item_id
+// PARAM: item_name = the display name (pass item_id twice if that is all you have)
+dataset = koi_koi_raw
+| filter source_log_type = "Audit"
+| filter object_id = "anthropic.claude-code" or object_name = "anthropic.claude-code"   // PARAM
+| alter scope  = coalesce(hostname, "<org-level event, no host>")
+| alter signal = if(type = "remediation", concat("remediation:", coalesce(action, "?")),
+                 if(type = "policies",    concat("policy:",      coalesce(action, "?")),
+                                          concat("inventory:",   coalesce(action, "?"))))
+| comp max(_time)           as last_signal,
+       min(_time)           as first_signal,
+       count()              as koi_events,
+       values(signal)       as signals,
+       values(item_version) as versions,
+       values(marketplace)  as marketplaces
+     by scope
+| alter already_remediated = if(arraystring(signals, ",") contains "remediation:", "yes", "no")
+| alter listed_by_policy   = if(arraystring(signals, ",") contains "policy:",       "yes", "no")
+| sort desc last_signal
+| limit 500
+```
+
+
+_Interpretation:_ Runs before the approval gate in Block and Remediate so the analyst sees scope and prior handling before approving a fleet-wide block. Worked example returned all 8 hosts carrying anthropic.claude-code: M-HFQQ44F5XF (27 events, 11 versions from 2.1.185 to 2.1.209, already_remediated yes), LAB-WIN11-01 (13 events, already_remediated yes), Greg's Mac mini, M-DQ3HT4R1P7, mzpanw-w11-koi, Vincent's MacBook Pro — all already_remediated yes — plus piusco and LAB-WIN10-02 with a single install each and no remediation. Six of eight already handled is exactly the finding that should change the response 
+
+
+_False positives:_ already_remediated is derived from the audit stream, not from a live remediation API — the Marketplace pack has no koi-remediations-list, so a remediation performed outside the observed window is invisible and the flag will read "no". Treat "yes" as reliable and "no" as unknown. remediation_opened is not remediation_executed: check the signals array rather than the flag when the distinction matter
+
+
+### D7 — MCP servers currently alerting — one row per REAL alert
+
+**Purpose:** both · **Status:** validated (3 rows on this tenant) · **Datasets:** koi_koi_raw (Alerts only)
+
+
+Which MCP servers are alerting, on which devices, and how many distinct alerts is that really?
+
+
+_Parameters:_ None — fleet-wide as written. Add `| filter alert_host = "<hostname>"` after the alter block for the per-device variant used by Investigate Device. Worked example: 24h.
+
+
+```sql
+// KOI Ext - MCP Server Audit, step "MCP servers currently alerting, one row per real alert".
+// Alerts are re-sent on every 1-minute fetch (~245x). dedup on metadata.notification_event_id
+// is MANDATORY - count() over raw rows is meaningless.
+// PARAM: none (fleet-wide). Add `| filter alert_host = "<host>"` for the per-device variant.
+dataset = koi_koi_raw
+| filter source_log_type = "Alerts"
+| alter nid       = json_extract_scalar(metadata, "$.notification_event_id")
+| alter res_arr   = json_extract_array(resources, "$")
+| alter obs_arr   = json_extract_array(observables, "$")
+| alter dev_obj   = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element", "$.type") = "device"), 0)
+| alter itm_obj   = arrayindex(arrayfilter(res_arr, json_extract_scalar("@element", "$.type") != "device"), 0)
+| alter item_kind = json_extract_scalar(itm_obj, "$.type")
+| filter item_kind = "mcp"
+| dedup nid by desc _time
+| alter alert_host   = json_extract_scalar(dev_obj, "$.data.hostname")
+| alter device_id    = json_extract_scalar(dev_obj, "$.data.id")
+| alter device_os    = json_extract_scalar(dev_obj, "$.data.os")
+| alter last_user    = json_extract_scalar(dev_obj, "$.data.last_logged_on_user")
+| alter mcp_name     = json_extract_scalar(itm_obj, "$.name")
+| alter mcp_id       = json_extract_scalar(itm_obj, "$.data.mcp_id")
+| alter mcp_type     = json_extract_scalar(itm_obj, "$.data.mcp_type")
+| alter mcp_transport= json_extract_scalar(itm_obj, "$.data.transport")
+| alter mcp_risk     = json_extract_scalar(itm_obj, "$.data.risk_level")
+| alter item_id      = arrayindex(arraymap(arrayfilter(obs_arr, json_extract_scalar("@element", "$.name") = "item.id"), json_extract_scalar("@element", "$.value")), 0)
+| alter policy_id    = json_extract_scalar(finding_info, "$.uid")
+| alter policy_title = json_extract_scalar(finding_info, "$.title")
+| fields _time, nid, policy_id, policy_title, severity, risk_level,
+         alert_host, device_id, device_os, last_user,
+         mcp_name, mcp_id, mcp_type, mcp_transport, mcp_risk, item_id
+| sort desc _time
+| limit 200
+```
+
+
+_Interpretation:_ The canonical Alerts-parsing idiom for this dataset, and the one query where getting it wrong changes the answer by two orders of magnitude: 734 raw Alerts rows in 24h collapse to exactly 3 real alerts. `dedup nid by desc _time` is what does it. Every field an analyst needs is a JSON string that has to be unpacked — and the top-level `hostname` column is NULL on every Alerts row, so alert_host can ONLY come from resources[type=device].data.hostname. Resource order is not fixed (device was index 1 in the samples inspected, but nothing guarantees it), so arrayfilter on @element is used rather th
+
+
+_False positives:_ None from deduplication — nid is the correct identity. The `item_kind != "device"` heuristic for itm_obj picks the first non-device resource; an alert carrying several non-device resources would only surface the first. risk_level "pending" on all three rows means Koi has not finished scoring them, not that they are safe.
+
+
+### D8 — MCP server runtime evidence in XDR
+
+**Purpose:** investigation · **Status:** validated (26 rows on this tenant) · **Datasets:** xdr_data (PROCESS)
+
+
+KOI found an MCP server in a config file — has it actually been launched?
+
+
+_Parameters:_ koi_host = alert_host from D7; the filter is omitted below so the worked example sweeps the fleet. Optionally narrow further with the mcp_name from D7. Worked example: fleet-wide, 24h.
+
+
+```sql
+// KOI Ext - MCP Server Audit, step "is this MCP server actually running here".
+// KOI reports MCP servers from configuration files; only XDR proves one executed.
+// Matches the standard MCP launch shapes rather than the bare token "mcp", which also
+// matches any analyst tooling that happens to mention it.
+// PARAM: koi_host  = alert_host from D7 (drop the filter to sweep the fleet)
+dataset = xdr_data
+| filter event_type = ENUM.PROCESS
+| alter cmd_lc = lowercase(coalesce(action_process_image_command_line, ""))
+| filter cmd_lc contains "@modelcontextprotocol"
+     or cmd_lc contains "mcp-server"
+     or cmd_lc contains "mcp_server"
+     or cmd_lc contains "mcp-gateway"
+     or cmd_lc contains "-m mcp"
+| alter mcp_launcher = if(cmd_lc contains "npx", "npx",
+                       if(cmd_lc contains "uvx", "uvx",
+                       if(cmd_lc contains "node", "node",
+                       if(cmd_lc contains "python", "python", "other"))))
+| fields _time, agent_hostname, mcp_launcher, action_process_image_name, action_process_image_path,
+         action_process_image_command_line, action_process_username, action_process_cwd,
+         action_process_signature_status, actor_process_image_name, actor_process_command_line
+| sort desc _time
+| limit 200
+```
+
+
+_Interpretation:_ The intended pairing for D7: KOI discovers MCP servers by reading configuration, which proves declaration but not execution; only PROCESS telemetry proves a server was launched. BE HONEST ABOUT WHAT THIS RETURNED — all 26 rows on this tenant are FALSE POSITIVES. The three MCP-alerting devices from D7 (M-DQ3HT4R1P7, M-HFQQ44F5XF, Gary's MacBook Air) are Macs with no Cortex XDR agent, so there is zero genuine MCP runtime telemetry available to correlate. Every hit is analyst tooling on OfficeiMac whose command line happens to contain "mcp-server" or "mcp-gateway" — python one-liners reading play
+
+
+_False positives:_ Substantial, and demonstrated above: any command line mentioning an MCP package name matches, including the analyst's own investigation. Mitigations that would cut it sharply — require actor_process_image_name to be a known agent host (claude, code.exe, cursor.exe, Claude.app), exclude interactive `-c` inline scripts, and pin agent_hostname to a device D7 actually flagged. `-m mcp` will also match
+
+
+### D9 — Item version drift — current state per host
+
+**Purpose:** investigation · **Status:** validated (8 rows on this tenant) · **Datasets:** koi_koi_raw (Audit only)
+
+
+Which version of this item is on each host right now, and is it still there at all?
+
+
+_Parameters:_ item_key / item_name = inputs.item_id (KOI Ext - Investigate Item / Enrich Item). Worked example: "anthropic.claude-code", 30d.
+
+
+```sql
+// KOI Ext - Investigate Item / Enrich Item, step "which version is where right now".
+// dedup keeps the newest audit row per host, so this is CURRENT state, not history.
+// PARAM: item_key / item_name = inputs.item_id (pass twice if that is all you have)
+dataset = koi_koi_raw
+| filter source_log_type = "Audit" and type = "extensions"
+| filter object_id = "anthropic.claude-code" or object_name = "anthropic.claude-code"   // PARAM
+| filter hostname != null
+| dedup hostname by desc _time
+| alter still_present   = if(action = "uninstalled", "no", "yes")
+| alter current_version = item_version
+| alter days_since_change = timestamp_diff(current_time(), _time, "DAY")
+| fields hostname, still_present, current_version, action, marketplace, platform,
+         _time as last_change_time, days_since_change, triggered_by, message
+| sort desc last_change_time
+| limit 500
+```
+
+
+_Interpretation:_ The present-tense complement to D1/D6 — those give every version ever seen, this gives the one that is there now. `dedup hostname by desc _time` reduces to the newest audit row per host and still_present reads its action. On anthropic.claude-code: 4 hosts still carry it at four different versions — mzpanw-w11-koi at 2.1.207 (8 days stale), M-HFQQ44F5XF at 2.1.209 (6 days), piusco at 2.1.201 (14 days), LAB-WIN10-02 at 2.1.185 (28 days) — while Greg's Mac mini, M-DQ3HT4R1P7, Vincent's MacBook Pro and LAB-WIN11-01 have removed it. A four-version spread across four hosts with the oldest 24 release
+
+
+_False positives:_ days_since_change measures time since the last KOI-observed change, not time since the last scan — on a host where KOI has not run recently (check with D3c) a large value means "no scan", not "stable". Bounded by the query timeframe: a host whose only event predates the window is missing entirely, so run at 30d or longer. still_present "yes" on an `updated` or `installed` row is a safe read; there
+
 
 ---
 
-# Appendix C — Needs a field or behaviour we could not confirm
+## Summary
 
-| Item | Status |
-|---|---|
-| `current_time()` | Used in **A7**. Theme A reports it working; Theme C could not validate it before quota exhaustion. Confirm on re-run — if it is rejected, drop `minutes_since_last_scan` and `inventory_confidence` and let the playbook compute the age from `last_scan`. |
-| `to_json_string()` on `resources` | Whether `resources` needs wrapping is contested between Theme B (wrapped, claims validated) and the field brief + Theme D (already a JSON string, use directly). Corrected to *unwrapped* here. **Settle by running B7 both ways.** |
-| JSONPath `$.0.x` vs `$[0].x` | Theme D proved `$[0].data.hostname` works and `$.[0]` is rejected. `$.0.x` was never tested against `$[0].x` on the same data. Normalised to `$[0]`. |
-| Backslash form in path regexes | **A4** still uses `"(?i)(\\Downloads\\|...)"`. Per syntax fact #1 this reaches the regex engine as `\D`, `\o`, … which are valid-but-wrong regex escapes. A7 and C3 use the proven `.`-wildcard form. **Verify A4's match set on the re-run and convert if wrong.** |
-| Operator precedence in **B10** | The final clause `cmd contains "curl -" and cmd contains "| sh"` sits inside a chain of `or`s with no parentheses. Confirm it binds as intended. |
-| `koi_pkg` ↔ `exec_pkg` normalisation | **B8/B9** assume KOI's `package_name` for an npm-scoped MCP server matches the executed entrypoint after stripping `@version`. Never verified against real KOI Alerts values. Probe both distinct-value sets before trusting a zero result. |
-| `action_external_hostname`, `dns_query_name` | `action_external_hostname` is ~56% populated; `dns_query_name` is **0% populated** (0 of 15,616 agent-owned NETWORK rows). DNS-name pivots are unavailable on this tenant — do not build a detection that requires them. |
-| `action_file_last_writer_actor` | Populated, but it is an **opaque base64 causality ID** (`9aTCTSsY3QFkBwAAAAAAAA==`), not a readable process name. Do not present it to an analyst as an actor name. Not used in any query here. |
-| Theme C C7–C13, Theme D D4–D12 | Exact XQL not persisted and not recoverable from the session transcript. **Excluded entirely.** This loses D7, the worked Alerts-dedupe query (734 raw rows → 3 real alerts), and Theme C's set-difference coverage pairs. If they are recovered, re-audit every one against the Alerts dedupe rule in §3 before use. |
+45 queries across 4 themes — 41 validated against live data, 4 parse-confirmed heavy joins (B10, B3, B8, B9). Per theme: A=8, B=12, C=13, D=12.
 
----
 
-*Query files and the validation runner live in `docs/xql/`. Filenames match the query ids above.*
+Query bodies are in `docs/xql/<id>.xql`. Highest value: **B8** (KOI-scored risk observed executing), **B9** (shadow MCP — running but never inventoried), **C4** (KOI last-scan-age per host), **A5/A6** (bidirectional coverage gaps).
