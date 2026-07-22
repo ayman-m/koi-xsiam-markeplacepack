@@ -7,11 +7,20 @@
 //
 // DEPENDENCY: the Alerts block below reads columns that only exist because
 // the sibling KoiContentExtension PARSING rule promoted them at ingest
-// (item_*, device_*, mcp_*, finding_*, alert_type). Without that parsing rule
-// 16 of the Alerts mappings silently resolve to null — including event.id,
-// alert.name, the whole host block and the whole resource block. The two
-// rules MUST be deployed together. The Audit block, by contrast, reads only
-// raw fields and is fully standalone.
+// (item_*, device_*, finding_*, alert_type). Without that parsing rule
+// 12 of the Alerts mappings silently resolve to null — event.type, alert.name,
+// alert.risks, the whole host block (device_id / hostname / os / os_family),
+// source.user.username, and the whole resource block (id / name / type /
+// sub_type). Only xdm.event.id, alert.description, alert.severity,
+// alert.subcategory and the observer block survive without it.
+//
+// The AUDIT block is very nearly standalone — it reads raw columns for
+// everything EXCEPT xdm.target.resource.sub_type, which reads marketplace_api,
+// a parsing-rule column. (An earlier version of this comment claimed the Audit
+// block was fully standalone; that stopped being true when sub_type was moved
+// to the API vocabulary. Corrected 21 July 2026.)
+//
+// Either way: the two rules MUST be deployed together.
 //
 // Structure: one MODEL header per dataset, with per-source_log_type
 // filter | alter chains underneath (the Okta reference pattern).
@@ -32,29 +41,87 @@
 //   * xdm.observer.name / .unique_identifier fall back to _collector_name
 //     because Koi stopped emitting koi_tenant_name / koi_customer_id — see the
 //     dated regression note in the Alerts block.
+//   * TWO FIELDS ARE DELIBERATELY UNMAPPED, both removed 21 July 2026 after
+//     live measurement. Full reasoning is inline at each site; do not re-add
+//     either from memory of an older version of this file:
+//       - xdm.alert.original_alert_id (was finding_uid) — finding_uid is a
+//         POLICY id, 3 distinct across 1,040+ alert rows. Koi supplies no
+//         per-alert vendor identifier on this stream, so the field stays empty.
+//       - xdm.target.host.fqdn (was alert_hostname) — hostnames contain a dot
+//         on 0 of 1,138 rows. They are bare names; xdm.target.host.hostname
+//         already carries them correctly.
+//     An empty field is a true statement. A populated one that is wrong is a
+//     silent cross-source join failure.
 //
-// Live-validated 21 July 2026 against 314 Alerts and ~20,215 Audit rows
-// (90 days, tenant api-ayman.xdr.eu). The marketplace and observer changes made
-// later the same day were re-measured on a fresher 90-day window (430 Alerts /
-// 20,170 Audit) — where the two disagree, the larger number is simply the later
-// reading of a growing dataset, not a contradiction.
+// 🚨 ALERT ROW COUNTS ARE NOT ALERT COUNTS. The Marketplace integration
+// re-sends every still-open alert on every 1-minute fetch cycle, so koi_koi_raw
+// holds one row per alert PER FETCH. Measured 21 July 2026:
+//   Alerts, last 24 h : 844 rows ->   3 real alerts (281x)
+//   Alerts, last 90 d : 1,158 rows -> 317 real alerts (3.7x)
+//   Audit,  last 90 d : 20,142 rows -> 20,142 distinct — NO duplication
+// The parsing rule promotes koi_notification_id (from
+// metadata.notification_event_id) as the ONLY correct dedupe key. Every widget,
+// report and playbook that counts alerts must use
+// count_distinct(koi_notification_id); a plain count() is wrong by two orders of
+// magnitude. XDM has no "this is a duplicate" field to express this in, so it
+// cannot be fixed here — it has to be handled by every consumer.
+//
+// Live-validated 21 July 2026 (90 days, tenant api-ayman.xdr.eu). Row counts
+// quoted below were taken by separate queries minutes apart against a dataset
+// that grows every fetch cycle, so they range 1,142–1,166 for Alerts and sit at
+// 20,142 for Audit; where two figures disagree the larger is simply the later
+// reading, not a contradiction. Ratios are stable and are what to trust.
 [MODEL: dataset=koi_koi_raw]
 filter source_log_type = "Alerts"
 | alter
     // ── identity ──────────────────────────────────────────────────────
-    // xdm.event.id = _id, NOT koi_event_id.
-    // _id is an XSIAM-internal column, present and DISTINCT on 314/314 alert
-    // rows. koi_event_id (observables[event.id]) is populated 314/314 but has
-    // only 18 DISTINCT VALUES across those 314 rows — it is a per-scan-batch
-    // UUID, so ~17.4 alerts collide on each one. Using it as the XDM event
-    // identity would silently merge unrelated alerts. It is still promoted by
-    // the parsing rule as a BATCH CORRELATOR and remains queryable as a raw
-    // dataset column; it deliberately has no XDM home.
+    // xdm.event.id = _id, NOT koi_event_id. DO NOT CHANGE THIS.
+    // _id is an XSIAM-internal column, present and DISTINCT on every alert row
+    // (1,048/1,048 at the 21 July 2026 check). koi_event_id
+    // (observables[event.id]) is equally populated but has only 20 DISTINCT
+    // VALUES across those 1,048 rows — it is a per-scan-batch UUID, so ~52 rows
+    // collide on each one. Using it as the XDM event identity would silently
+    // merge unrelated alerts. It is still promoted by the parsing rule as a
+    // BATCH CORRELATOR and remains queryable as a raw dataset column; it
+    // deliberately has no XDM home.
+    //
+    // _id being per-ROW is correct here and is NOT a dedupe failure. A row IS a
+    // distinct XSIAM event, even when three of them describe the same Koi alert.
+    // Deduplication happens at query time on koi_notification_id — see the
+    // banner at the top of this file. Do not "fix" xdm.event.id by pointing it
+    // at koi_notification_id: that would give 317 XDM events sharing ids across
+    // 1,048 rows, which is a worse violation of the field's contract.
     xdm.event.id                = _id,
     // NOTE: alert_type has exactly ONE distinct value in 90 days of live data
     // ("policy_violation"), so xdm.event.type is effectively constant here.
     xdm.event.type              = alert_type,
-    xdm.alert.original_alert_id = finding_uid,
+    // ❌ REMOVED 21 July 2026: xdm.alert.original_alert_id = finding_uid.
+    // DO NOT RE-ADD IT. finding_uid is the FINDING/POLICY DEFINITION id, not an
+    // alert identity. Live, 90 days: 3 DISTINCT VALUES ACROSS 1,040+ ALERT ROWS
+    // (1 distinct across the last 6 hours) — 20940 "MCP Servers alerts",
+    // 23300 "NPM Block CS", 20907 "yito test". Every alert a policy ever raises
+    // shares its finding_uid, so the field was answering "which rule fired",
+    // not "which alert is this".
+    //
+    // This is the SAME defect xdm.event.id above explicitly avoids — the
+    // too-coarse-identifier trap was sidestepped in one place and walked into in
+    // another. It is now closed in both.
+    //
+    // The field is REMOVED, not re-pointed, and the two obvious substitutes are
+    // both rejected on purpose:
+    //   * _id — it is the XSIAM ROW id, already carried by xdm.event.id. It is
+    //     not "original" in any sense: XSIAM minted it, Koi never saw it.
+    //     original_alert_id means "the id the VENDOR gave this alert".
+    //   * koi_notification_id — it is a NOTIFICATION/delivery id, correct for
+    //     deduplication and used for exactly that, but it is not the vendor's
+    //     alert identifier either.
+    // Koi supplies NO per-alert vendor identifier on this stream. The honest
+    // representation of "we do not have one" is an unmapped field. A populated
+    // field that silently lies costs more than a null one — a cross-source join
+    // on original_alert_id would have collapsed 1,040 alerts onto 3.
+    // finding_uid remains a queryable raw dataset column (promoted by the
+    // parsing rule) and is the right thing to group by when you want per-policy
+    // alert volume.
     xdm.alert.name              = finding_title,
     xdm.alert.description       = message,
     xdm.alert.severity          = to_string(severity),
@@ -65,11 +132,30 @@ filter source_log_type = "Alerts"
     // ── target host (the device the item is installed on) ──────────────
     xdm.target.host.device_id   = device_id,
     xdm.target.host.hostname    = alert_hostname,
-    xdm.target.host.fqdn        = alert_hostname,
+    // ❌ REMOVED 21 July 2026: xdm.target.host.fqdn = alert_hostname.
+    // DO NOT RE-ADD IT. The value is not an FQDN and never was. Live check:
+    // alert_hostname CONTAINS A DOT ON 0 OF 1,138 ALERT ROWS (re-confirmed at
+    // 0 of 1,158 during this pass, split 0/858 mcp_server and 0/296 extension).
+    // The values are bare NetBIOS-style or human-chosen machine names —
+    // "M-HFQQ44F5XF", "Gary的MacBook Air" — and the dot count is zero in every
+    // cut of the data: by OS (mac 0/962, linux 0/140, windows 0/70) and by item
+    // type alike. This is a property of the feed, not of one cohort.
+    //
+    // Mapping a bare hostname to fqdn is WORSE than leaving the field null: a
+    // cross-source correlation that joins on fqdn will silently fail to match
+    // the same machine reported by a source that does supply a real FQDN, and
+    // it fails quietly, producing a smaller answer rather than an error.
+    // xdm.target.host.hostname above already carries this value correctly and is
+    // the field the data actually satisfies. Koi does not supply a domain
+    // component on this stream, so there is nothing to build an FQDN from.
     xdm.target.host.os          = device_os_obs,
-    // Live-confirmed: linux 140 / mac 104 / windows 70 = 314/314, zero
-    // fall-through to the null default. The literal for macOS is exactly
-    // "mac". Do not "tidy" these branches.
+    // Live-confirmed exhaustive, zero fall-through to the null default.
+    // RE-MEASURED 21 July 2026 on the current population (the earlier reading
+    // "linux 140 / mac 104 / windows 70 = 314/314" is stale):
+    //   mac 962 · linux 140 · windows 70 = 1,172/1,172 rows mapped.
+    // The mac share grew because the MCP cohort that now dominates ingestion is
+    // mac-heavy — the branch set is unchanged and still complete.
+    // The literal for macOS is exactly "mac". Do not "tidy" these branches.
     xdm.target.host.os_family   = if(device_os_obs = "windows", XDM_CONST.OS_FAMILY_WINDOWS,
                                      device_os_obs = "mac",     XDM_CONST.OS_FAMILY_MACOS,
                                      device_os_obs = "linux",   XDM_CONST.OS_FAMILY_LINUX,
@@ -79,16 +165,22 @@ filter source_log_type = "Alerts"
     // ── target resource (the flagged item / MCP server) ────────────────
     // id: item_id, plain. The custom pack used
     //     coalesce(item_id, to_string(mcp_id)); that fallback is DEAD CODE —
-    //     item_id is non-null 314/314 including all 18 MCP rows, so it never
-    //     fires and mcp_id never reached XDM anyway. mcp_id stays available
-    //     as a promoted dataset column.
+    //     item_id is non-null AND non-empty on every alert row including all
+    //     878 mcp_server rows (re-verified 21 July 2026 on the population that
+    //     is now 75% MCP, i.e. exactly the cohort the fallback was written for),
+    //     so it never fires and mcp_id never reached XDM anyway. mcp_id stays
+    //     available as a promoted dataset column.
     // name: item_id, plain. The custom pack used
     //     coalesce(mcp_package_name, item_id); also dead — mcp_package_name
-    //     equals item_id on 18/18 MCP rows, so the coalesce never changed the
+    //     equals item_id on 878/878 MCP rows, so the coalesce never changed the
     //     result. Stated plainly rather than dressed up as a preference.
     xdm.target.resource.id      = item_id,
     xdm.target.resource.name    = item_id,
-    // extension (296) | mcp_server (18)
+    // Two values only. ⚠️ THE SPLIT HAS INVERTED — corrected 21 July 2026 from
+    // a stale "extension (296) | mcp_server (18)":
+    //   mcp_server 878 rows | current, effectively 100% of live ingestion
+    //   extension  296 rows | LAST SEEN 2026-07-09, nothing for 12 days
+    // Anything downstream that assumed "mostly extensions" is now backwards.
     xdm.target.resource.type    = item_type,
     // sub_type = the software ECOSYSTEM. This replaces the custom pack's
     // mcp_type (local|remote), which is a network locality, not a sub-type of
@@ -107,8 +199,17 @@ filter source_log_type = "Alerts"
     // the display form still has item_marketplace on the raw dataset.
     // Coverage is UNCHANGED by this switch: on live data item_marketplace_api is
     // non-null on exactly the same 296 alert rows as item_marketplace
-    // (npm 293 -> npm, chrome 3 -> chrome_web_store), null on the 18 MCP alerts,
-    // which carry no item.marketplace observable. Nothing is lost today.
+    // (npm 293 -> npm, chrome 3 -> chrome_web_store), null on the 878 mcp_server
+    // rows, which carry no item.marketplace observable. Nothing is lost.
+    //
+    // ⚠️ THIS FIELD IS NULL ON ALL CURRENT DATA — and that is NOT a bug.
+    // Corrected 21 July 2026 from a stale "the 18 MCP alerts". Coverage is 296
+    // of 1,174 rows (25%), and the extension cohort that supplies those 296 has
+    // sent nothing since 2026-07-09. The mapping is KEPT: it is correct, and the
+    // cohort may return the moment an extension policy fires again. Do not
+    // delete it on the evidence of a 24-hour query, and do not paper over it
+    // with resources[mcp].data.marketplace — that field is the empty string on
+    // 843 of 854 MCP rows (see the parsing rule).
     // If an unmappable value (built_in / side_loaded / ollama) ever reaches an
     // alert, sub_type is deliberately NULL rather than a value that is not in the
     // vocabulary the field claims to hold.
@@ -117,23 +218,32 @@ filter source_log_type = "Alerts"
     xdm.observer.vendor         = _vendor,
     xdm.observer.product        = _product,
     // ── tenant (which KOI customer this event belongs to) ──────────────
-    // ⚠️ REGRESSION, 21 July 2026 — RE-CHECK THIS. Koi has stopped emitting
-    // koi_tenant_name and koi_customer_id. Measured on this dataset today:
-    //   Alerts, last 90 days : 430 rows, 314 carry both fields.
-    //   Alerts, last 24 hours: 116 rows,   0 carry either field.
-    //   (Audit, same check   : 20,170 / 19,984 and 186 / 0. Same story.)
-    // The 116 and the 186 are the SAME rows in both cuts — i.e. every row
-    // missing the fields was ingested in the last 24 hours and every older row
-    // has them, so the cut-over is sharp, not a gradual drop-off. Pack-wide the
-    // brief records 20,324 of 20,522 historical rows populated against 0 recent.
+    // ⚠️ REGRESSION, STILL ACTIVE — RE-CHECK THIS. Koi has stopped emitting
+    // koi_tenant_name and koi_customer_id. RE-MEASURED 21 July 2026, superseding
+    // the first reading of the same day (which was 430/314 and 20,170/19,984 —
+    // same story, smaller window):
+    //   Alerts, last 90 days :  1,176 rows,    314 carry both fields (27%).
+    //   Alerts, last 24 hours:    862 rows,      0 carry either field.
+    //   Audit,  last 90 days : 20,142 rows, 19,885 carry both fields (98.7%).
+    //   Audit,  last 24 hours:    257 rows,      0 carry either field.
+    // The 24-hour rows are a strict subset of the 90-day rows that lack the
+    // fields — every row missing them is recent and every older row has them, so
+    // the cut-over is sharp, not a gradual drop-off. The alert percentage looks
+    // far worse than the audit one only because the Alerts stream is duplicated
+    // (see the banner at the top of this file): the 862 recent alert rows are 3
+    // real alerts re-sent, not 862 events lost.
+    // NOTE the absolute count of populated ALERT rows has not moved at all —
+    // 314 then, 314 now — which is the cleanest possible confirmation that the
+    // field simply stopped arriving on a date and nothing since has carried it.
     //
     // The mapping is NOT deleted: the historical rows depend on it and the
     // Koi-side change may be transient. A third argument is appended instead.
     //
     // FALLBACK = _collector_name, the XSIAM event-collector (integration
     // instance) name. Chosen on evidence, not convenience:
-    //   * populated 430/430 alert rows and 20,170/20,170 audit rows over 90 days
-    //     and 302/302 rows in the last 24 hours — 100%, both blocks, both eras;
+    //   * populated 1,176/1,176 alert rows and 20,142/20,142 audit rows over
+    //     90 days, and 862/862 + 257/257 in the last 24 hours — 100%, both
+    //     blocks, both eras (re-measured 21 July 2026);
     //   * it PRESERVES THE PARTITION the lost field carried. One instance holds
     //     one Koi API key, so one instance = one Koi tenant. Live values line up
     //     one-for-one and even share the string: koi_tenant_name "plts" <->
@@ -170,17 +280,21 @@ filter source_log_type = "Alerts"
 //   * target.host.*            — the managed device (85% of rows carry one).
 filter source_log_type = "Audit"
 | alter
-    // _id is present and distinct 20,215/20,215. (Koi also emits its own `id`
-    // UUID, equally complete; _id is used here for consistency with the
-    // Alerts block.)
+    // _id is present and distinct on every audit row (20,142/20,142,
+    // re-measured 21 July 2026). Koi also emits its own `id` UUID, equally
+    // complete and ALSO 20,142 distinct — which is the positive control proving
+    // the Audit stream carries NO duplication, unlike Alerts. _id is used here
+    // for consistency with the Alerts block.
     xdm.event.id                  = _id,
     xdm.event.type                = action,
     xdm.event.original_event_type = type,
     xdm.event.operation_sub_type  = action,
     xdm.event.description         = message,
     // Operation coverage was 17,233/20,215 (85.3%) with the custom pack's
-    // chain; the four branches marked ADDED close 2,974 of the 2,982 null
-    // rows, taking it to 20,207/20,215 (99.96%).
+    // chain; the four branches marked ADDED close all but 8 of the null rows.
+    // RE-MEASURED 21 July 2026 by running this exact if() chain live:
+    // 20,134 of 20,142 rows map (99.96%) — the ratio is unchanged and the
+    // 8 unmapped rows are still the same 8.
     //   archived               2,969 rows — the 4th-largest action overall.
     //   unarchived                 2 rows.
     //   email_sent                 2 rows.
@@ -208,8 +322,9 @@ filter source_log_type = "Audit"
         to_string(null)),
     // No explicit success/fail flag in Koi audit; default SUCCESS, but keep
     // the failure regex so a future failure verb is caught automatically.
-    // Live: resolves SUCCESS on 20,215/20,215 — the regex never matches
-    // because no failure action exists in this data. Unvalidatable here.
+    // Live: resolves SUCCESS on every audit row (20,142/20,142 as of
+    // 21 July 2026) — the regex never matches because no failure action exists
+    // in this data. Unvalidatable here.
     xdm.event.outcome = if(action ~= "(?i).*(failed|error|deny|denied|reject).*",
                           XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_SUCCESS),
     // Actor (initiator).
@@ -236,7 +351,9 @@ filter source_log_type = "Audit"
     // Leaving this as the raw `marketplace` while the Alerts block emits the API
     // form would put "chrome" and "chrome_web_store" into the same field for the
     // same ecosystem — the exact confusion this pack exists to remove.
-    // Live effect, measured on 20,170 audit rows over 90 days (21 July 2026):
+    // Live effect, measured on 20,170 audit rows over 90 days (21 July 2026;
+    // re-measured later the same day at 13,800 populated of 20,142 — the counts
+    // drift with ingestion, the proportions do not):
     //   populated 13,849 -> 13,015. The 834-row difference is deliberate and is
     //   entirely built_in (828), ollama (5) and side_loaded (1). built_in and
     //   side_loaded are installation_method values leaking into the marketplace
@@ -258,10 +375,11 @@ filter source_log_type = "Audit"
     // Tenant. ⚠️ Same regression as the Alerts block — full rationale and the
     // reason for choosing _collector_name over _vendor/_product is documented
     // there; do not change one block without the other.
-    // Audit-side numbers, measured 21 July 2026:
-    //   last 90 days : 20,170 rows, 19,984 carry koi_tenant_name/koi_customer_id.
-    //   last 24 hours:    186 rows,      0 carry either.
-    //   _collector_name  : 20,170/20,170 and 186/186 — 100% in both windows.
-    // The 186 rows missing the Koi fields are exactly the last-24-hour rows.
+    // Audit-side numbers, RE-MEASURED 21 July 2026 (supersedes the earlier
+    // 20,170 / 19,984 / 186 reading of the same day):
+    //   last 90 days : 20,142 rows, 19,885 carry koi_tenant_name/koi_customer_id.
+    //   last 24 hours:    257 rows,      0 carry either.
+    //   _collector_name  : 20,142/20,142 and 257/257 — 100% in both windows.
+    // The 257 rows missing the Koi fields are exactly the last-24-hour rows.
     xdm.observer.name              = coalesce(koi_tenant_name, koi_customer_id, _collector_name),
     xdm.observer.unique_identifier = coalesce(koi_customer_id, _collector_name);

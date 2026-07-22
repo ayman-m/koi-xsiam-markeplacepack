@@ -14,11 +14,12 @@ description: |-
   JSON blob out of the alert description. That blob does not exist: neither the custom
   nor the Marketplace integration ever emits it. On this data the regex matches nothing,
   KoiContext stays empty, and every downstream playbook silently degrades. This version
-  reads the fields that ARE present - verified on 314 of 314 Alerts rows in koi_koi_raw
-  over 90 days.
+  reads the fields that ARE present - verified on all 1,172 Alerts rows in koi_koi_raw
+  over 90 days (= 317 distinct alert occurrences; see the duplication note below).
 
   WHAT IT READS
     finding_info  -> uid (finding_uid), title (finding_title), types[0] (alert_type)
+    metadata      -> notification_event_id (notification_id)  <- THE ALERT IDENTITY
     observables[] matched by .name -> item.id, item.type, item.version,
                                      item.marketplace, device.os, device.serial, event.id
     resources[]   matched by .type -> type=device: data.id, data.hostname,
@@ -26,13 +27,40 @@ description: |-
                                      type=item:   data.package_name, data.risk_level
                                      type=mcp:    data.mcp_id, data.risk_level
 
-  RESOURCES / OBSERVABLES / METADATA ARRIVE AS JSON STRINGS, NOT OBJECTS. The first three
-  tasks ParseJSON them; no accessor resolves before that. This is the single most common
-  way this playbook is broken by editing.
+  ============================================================================
+  THE ALERTS STREAM IS DUPLICATED - notification_id IS THE ONLY ALERT IDENTITY
+  ============================================================================
+  The Marketplace KOI integration re-sends every still-open alert on every fetch cycle
+  (eventFetchInterval defaults to 1 minute), so koi_koi_raw carries one row PER ALERT PER
+  FETCH. Live, 90 days to 2026-07-21 on tenant api-ayman.xdr.eu:
 
-  RESOURCE LAYOUT IS NOT POSITIONALLY STABLE - resources[0].type is "item" on 296 alerts
-  and "mcp" on 18. Every accessor here therefore selects by .name / .type, never by index.
-  Do not "simplify" these to fixed indexes.
+    item_type      rows    distinct notification_event_id   inflation   last seen
+    extension       296              296                      1.0x      2026-07-09
+    mcp_server      876               21                     41.7x      current
+    ALL           1,172              317                      3.7x
+
+  The duplication is entirely in the mcp_server cohort - extension alerts are 1:1. One
+  mcp_server notification was re-sent 408 times over 6.8 hours; over the last 24 hours the
+  ratio reaches ~245:1. Within one notification `_time` is CONSTANT and only `_insert_time`
+  advances, one insert per minute.
+
+  `metadata.notification_event_id` is the only field that identifies an alert OCCURRENCE:
+  317 distinct values, a verified 1:1 identity for
+  (item.id, device.id, finding_info.uid, finding_info.created_time). It is 100% populated.
+  finding_uid (3 distinct) is the POLICY id and koi_event_id (20 distinct) is the SCAN BATCH
+  id - neither identifies an alert. This playbook therefore publishes
+  KoiContext.notification_id, and KOI Ext - Alert Triage uses it to suppress duplicate
+  investigations. See that playbook's description for the correlation-rule configuration
+  that has to accompany it.
+
+  RESOURCES / OBSERVABLES / METADATA ARRIVE AS JSON STRINGS, NOT OBJECTS. The first four
+  tasks ParseJSON them; no accessor resolves before that. This is the single most common
+  way this playbook is broken by editing. `metadata` is a plain object (not an array), so
+  one ParseJSON plus one accessor is enough - it needs no filter and no positional coalesce.
+
+  RESOURCE LAYOUT IS NOT POSITIONALLY STABLE - resources[0].type is "item" on the 296
+  extension alerts and "mcp" on the 21 mcp_server alerts. Every accessor here therefore
+  selects by .name / .type, never by index. Do not "simplify" these to fixed indexes.
 
   SCALARS: every field is coerced with a join transformer so KoiContext.<field> resolves
   as a scalar, not a 1-element array. This replaces the original's single
@@ -63,13 +91,19 @@ description: |-
   is a static table carried in tasks 22-24 and applied with the standard ParseJSON / filter /
   join transformers - the pack ships no automation script and this adds none.
 
-  KNOWN LIMITS ON LIVE DATA
+  KNOWN LIMITS ON LIVE DATA (re-measured 2026-07-21, per ALERT OCCURRENCE not per row)
   - alert_type has exactly ONE value in 90 days: "policy_violation". Do not build branching
     logic on it; there is nothing to branch on.
-  - item.marketplace is absent on MCP alerts (0/18). Of the 296 alerts that carry one, 293 are
-    npm (unchanged by the map) and 3 are chrome (mapped to chrome_web_store). An empty mapped
-    value is not a failure - resolve it with koi-inventory-list(item_id=..., limit=1) and read
-    Koi.Inventory.marketplace.
+  - item.marketplace is ABSENT on every mcp_server alert (0 of 21) and present on every
+    extension alert (296 of 296: npm 293, chrome 3). Because no extension alert has arrived
+    since 2026-07-09, marketplace is currently absent on effectively 100% of ingestion.
+    AN EMPTY MARKETPLACE IS NOW THE COMMON CASE, NOT THE EDGE CASE. It is not a failure -
+    resolve it with koi-inventory-list(item_id=..., limit=1) and read
+    Koi.Inventory.marketplace, and expect that to come back empty too for a freshly-alerted
+    item (the inventory index lags the event stream - see VERIFIED_FACTS 7d.3).
+  - risk_level per occurrence: low 204, medium 52, pending 50, high 8, critical 3. All five
+    values of the vocabulary occur, so no branch literal in this chain is dead.
+  - item_type per occurrence: extension 296, mcp_server 21. Both literals occur.
 starttaskid: '0'
 tasks:
   '0':
@@ -199,13 +233,93 @@ tasks:
         simple: 'false'
     nexttasks:
       '#error#':
-      - '4'
+      - '25'
       '#none#':
-      - '4'
+      - '25'
     separatecontext: false
     continueonerror: true
     continueonerrortype: errorPath
     view: '{"position": {"x": 450, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '25':
+    id: '25'
+    taskid: koixac00-0000-4000-8000-000000000025
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000025
+      version: -1
+      name: Parse metadata
+      description: 'The alert''s metadata column is a JSON STRING containing a plain object (NOT an array) - {notification_event_id, version, ...}. ParseJSON it into KoiRaw.metadata before any accessor is used. Because it is an object rather than an array, the next task needs one accessor and no filter; do not copy the observables/resources filter pattern onto it. Best-effort: if the alert does not carry metadata the chain continues and notification_id is simply empty, which disables duplicate suppression in KOI Ext - Alert Triage rather than breaking it.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiRaw.metadata
+      value:
+        complex:
+          root: inputs.metadata
+          transformers:
+          - operator: ParseJSON
+      append:
+        simple: 'false'
+    nexttasks:
+      '#error#':
+      - '26'
+      '#none#':
+      - '26'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 60, "y": 540}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '26':
+    id: '26'
+    taskid: koixac00-0000-4000-8000-000000000026
+    type: regular
+    task:
+      id: koixac00-0000-4000-8000-000000000026
+      version: -1
+      name: Set notification_id (the alert identity)
+      description: 'metadata.notification_event_id. THE ONLY FIELD THAT IDENTIFIES AN ALERT OCCURRENCE. Coverage 100%; 317 distinct values across 1,172 rows over 90 days, and a verified 1:1 identity for (item.id, device.id, finding_info.uid, finding_info.created_time). The KOI integration re-sends every still-open alert once a minute, so the same notification_id arrives many times - 408 times for one mcp_server alert. Do NOT substitute finding_uid (3 distinct - it is the POLICY id) or koi_event_id (20 distinct - it is the SCAN BATCH id); both were measured and both are far too coarse. KOI Ext - Alert Triage keys its duplicate-suppression gate on this value.'
+      iscommand: false
+      brand: ''
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiContext.notification_id
+      value:
+        complex:
+          root: KoiRaw.metadata
+          accessor: notification_event_id
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ''
+      append:
+        simple: 'false'
+    nexttasks:
+      '#none#':
+      - '4'
+    separatecontext: false
+    continueonerrortype: ''
+    view: '{"position": {"x": 60, "y": 710}}'
     note: false
     timertriggers: []
     ignoreworker: false
@@ -221,7 +335,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000004
       version: -1
       name: Set item_id
-      description: observables[name="item.id"].value. Coverage 314/314. Example "@playwright/test", "cortex-mcp".
+      description: observables[name="item.id"].value. Coverage 317/317 alert occurrences (all 1,172 rows). Example "@playwright/test", "cortex-mcp".
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -271,7 +385,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000005
       version: -1
       name: Set item_type
-      description: observables[name="item.type"].value. Coverage 314/314. Values seen - extension (296), mcp_server (18).
+      description: 'observables[name="item.type"].value. Coverage 317/317 alert occurrences (all 1,172 rows). Values seen - extension (296 occurrences), mcp_server (21 occurrences). Both literals occur; neither branch is dead. NOTE the row/occurrence gap - the 21 mcp_server alerts account for 876 of the 1,172 rows, because open MCP alerts are re-sent once a minute.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -321,7 +435,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000006
       version: -1
       name: Set item_version
-      description: observables[name="item.version"].value. Coverage 314/314. This is the version that TRIGGERED the alert; it is not necessarily the version the org's inventory record reports.
+      description: observables[name="item.version"].value. Coverage 317/317 alert occurrences (all 1,172 rows). This is the version that TRIGGERED the alert; it is not necessarily the version the org's inventory record reports.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -404,7 +518,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000007
       version: -1
       name: Set marketplace_raw (verbatim event value)
-      description: 'observables[name="item.marketplace"].value, kept EXACTLY as the event wrote it. NEW - the original playbook never extracted this, yet marketplace is a REQUIRED argument on koi-inventory-item-get, koi-inventory-item-endpoints-list and all four allowlist/blocklist add/remove commands. Coverage 296/314: npm 293, chrome 3, ABSENT on all 18 MCP alerts. This value is NOT safe to pass to a command - the event vocabulary and the API vocabulary differ (VERIFIED_FACTS 7c). Tasks 22-24 translate it into KoiContext.marketplace; this field exists so an analyst can still see what the event said.'
+      description: 'observables[name="item.marketplace"].value, kept EXACTLY as the event wrote it. NEW - the original playbook never extracted this, yet marketplace is a REQUIRED argument on koi-inventory-item-get, koi-inventory-item-endpoints-list and all four allowlist/blocklist add/remove commands. Coverage 296 of 317 occurrences: npm 293, chrome 3, ABSENT on all 21 mcp_server alerts. Since no extension alert has arrived since 2026-07-09, this field is currently absent on effectively 100% of ingestion - EMPTY IS THE COMMON CASE. This value is NOT safe to pass to a command - the event vocabulary and the API vocabulary differ (VERIFIED_FACTS 7c). Tasks 22-24 translate it into KoiContext.marketplace; this field exists so an analyst can still see what the event said.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -454,7 +568,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000008
       version: -1
       name: Set koi_event_id
-      description: observables[name="event.id"].value. Coverage 314/314 but only 18 DISTINCT values across 314 alerts - this is a per-scan-batch UUID, not a per-occurrence one. Useful for grouping alerts from the same scan; do NOT treat it as a unique alert identity.
+      description: observables[name="event.id"].value. Coverage 317/317 alert occurrences (all 1,172 rows) but only 20 DISTINCT values across them - this is a per-scan-batch UUID, not a per-occurrence one. Useful for grouping alerts from the same scan; do NOT treat it as a unique alert identity. Use KoiContext.notification_id for that (317 distinct).
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -504,7 +618,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000009
       version: -1
       name: Set device_os
-      description: observables[name="device.os"].value. Coverage 314/314. Values - linux (140), mac (104), windows (70).
+      description: observables[name="device.os"].value. Coverage 317/317 alert occurrences (all 1,172 rows). Values per occurrence - linux 140, mac 107, windows 70. Display only; nothing in this pack branches on it.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -554,7 +668,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000010
       version: -1
       name: Set device_serial
-      description: observables[name="device.serial"].value. Coverage 314/314.
+      description: observables[name="device.serial"].value. Coverage 317/317 alert occurrences (all 1,172 rows).
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -604,7 +718,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000011
       version: -1
       name: Set device_id
-      description: resources[type="device"].data.id. Coverage 314/314. Selected by .type, never by index.
+      description: resources[type="device"].data.id. Coverage 317/317 alert occurrences (all 1,172 rows). Selected by .type, never by index.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -654,7 +768,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000012
       version: -1
       name: Set alert_hostname
-      description: resources[type="device"].data.hostname. Coverage 314/314.
+      description: resources[type="device"].data.hostname. Coverage 317/317 alert occurrences (all 1,172 rows).
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -704,7 +818,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000013
       version: -1
       name: Set device_last_user
-      description: resources[type="device"].data.last_logged_on_user. Coverage 314/314. Note the sibling key data.network_user is present but literally null on every device resource - it is deliberately not extracted.
+      description: resources[type="device"].data.last_logged_on_user. Coverage 317/317 alert occurrences (all 1,172 rows). Note the sibling key data.network_user is present but literally null on every device resource - it is deliberately not extracted.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -754,7 +868,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000014
       version: -1
       name: Set package_name
-      description: data.package_name from resources[type="item"] on extension alerts (296/314) or resources[type="mcp"] on MCP alerts (18/18). One filter covers both because the two resource types are mutually exclusive on any given alert - this is the coalesce, expressed as an inList filter rather than a fixed index.
+      description: data.package_name from resources[type="item"] on extension alerts (296/296) or resources[type="mcp"] on MCP alerts (21/21). One filter covers both because the two resource types are mutually exclusive on any given alert - this is the coalesce, expressed as an inList filter rather than a fixed index.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -804,7 +918,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000015
       version: -1
       name: Set risk_level
-      description: 'data.risk_level from resources[type="item"] (296/314) or resources[type="mcp"] (18/18). Same mutually-exclusive coalesce as package_name. Vocabulary matches Koi.Inventory.risk_level: low / medium / high / critical / pending. This is KOI''s risk at the moment the alert fired; the org inventory record read by KOI Ext - Investigate Item may differ.'
+      description: 'data.risk_level from resources[type="item"] (296/296) or resources[type="mcp"] (21/21). Same mutually-exclusive coalesce as package_name. Vocabulary matches Koi.Inventory.risk_level: low / medium / high / critical / pending. This is KOI''s risk at the moment the alert fired; the org inventory record read by KOI Ext - Investigate Item may differ.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -854,7 +968,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000016
       version: -1
       name: Set mcp_id
-      description: resources[type="mcp"].data.mcp_id. Present on MCP alerts only (18/18 of those, 0 of the 296 extension alerts). Empty on extension alerts is the correct result, not a failure.
+      description: resources[type="mcp"].data.mcp_id. Present on MCP alerts only (21/21 of those, 0 of the 296 extension alerts). Empty on extension alerts is the correct result, not a failure.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -904,7 +1018,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000017
       version: -1
       name: Set finding_uid
-      description: finding_info.uid. Coverage 314/314, only 3 distinct values - this is the finding DEFINITION identity (the rule that fired), not a per-occurrence id. Correct behaviour, not a bug.
+      description: 'finding_info.uid. Coverage 317/317 alert occurrences (all 1,172 rows), only 3 distinct values across all of them - this is the finding DEFINITION identity, i.e. the policy that fired (20940 "MCP Servers alerts", 23300 "NPM Block CS", 20907 "yito test"), not a per-occurrence id. Correct behaviour, not a bug. It is NOT an alert identity - use KoiContext.notification_id for that.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -945,7 +1059,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000018
       version: -1
       name: Set finding_title
-      description: finding_info.title. Coverage 314/314. Example "NPM Block CS". This is the most useful human-readable discriminator available, since alert_type is constant.
+      description: finding_info.title. Coverage 317/317 alert occurrences (all 1,172 rows). Example "NPM Block CS". This is the most useful human-readable discriminator available, since alert_type is constant.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -986,7 +1100,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000019
       version: -1
       name: Set alert_type
-      description: 'finding_info.types[0]. Coverage 314/314, but exactly ONE distinct value in 90 days: "policy_violation". finding_info.types has array_length 1 on 314/314, so the join collapses it losslessly. WARNING - do not write branching logic on this field; on live data there is nothing to branch on. Branch on finding_title or risk_level instead.'
+      description: 'finding_info.types[0]. Coverage 317/317 alert occurrences (all 1,172 rows), but exactly ONE distinct value in 90 days: "policy_violation". finding_info.types has array_length 1 on every row, so the join collapses it losslessly. WARNING - do not write branching logic on this field; on live data there is nothing to branch on. Branch on finding_title or risk_level instead.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1117,7 +1231,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000024
       version: -1
       name: Set marketplace (API-safe)
-      description: 'Maps KoiContext.marketplace_raw - the value the EVENT carried - onto the vocabulary the KOI API accepts, by filtering the map on src and reading api. This is the one place in the chain where an event-derived marketplace is translated; KOI Ext - Alert Triage, Investigate Item, Enrich Item and Block and Remediate all consume the mapped value. An unmapped value (ollama, built_in, side_loaded, or anything KOI adds later) yields EMPTY on purpose - the downstream playbooks re-resolve an empty marketplace from koi-inventory-list(item_id) into Koi.Inventory.marketplace, whereas a wrong value is a hard HTTP 400. Live coverage on alert payloads: npm 293 of 296 (identity row), chrome 3 of 296 (becomes chrome_web_store), absent on all 18 MCP alerts. The comparison is case-sensitive; all 20 marketplace values seen in koi_koi_raw over 90 days are lower case.'
+      description: 'Maps KoiContext.marketplace_raw - the value the EVENT carried - onto the vocabulary the KOI API accepts, by filtering the map on src and reading api. This is the one place in the chain where an event-derived marketplace is translated; KOI Ext - Alert Triage, Investigate Item, Enrich Item and Block and Remediate all consume the mapped value. An unmapped value (ollama, built_in, side_loaded, or anything KOI adds later) yields EMPTY on purpose - the downstream playbooks re-resolve an empty marketplace from koi-inventory-list(item_id) into Koi.Inventory.marketplace, whereas a wrong value is a hard HTTP 400. Live coverage on alert payloads: npm 293 of 296 (identity row), chrome 3 of 296 (becomes chrome_web_store), absent on all 21 mcp_server alerts and therefore on 100% of current ingestion. The comparison is case-sensitive; all 20 marketplace values seen in koi_koi_raw over 90 days are lower case.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1167,7 +1281,7 @@ tasks:
     quietmode: 0
     isoversize: false
     isautoswitchedtoquietmode: false
-view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3540, "width": 800, "x": 450, "y": 50}}}'
+view: '{"linkLabelsPosition": {}, "paper": {"dimensions": {"height": 3540, "width": 1200, "x": 60, "y": 50}}}'
 inputs:
 - key: finding_info
   value:
@@ -1187,6 +1301,12 @@ inputs:
   required: false
   description: The alert's OCSF resources array, as a JSON STRING. Defaults to the alert field of the same name.
   playbookInputQuery: null
+- key: metadata
+  value:
+    simple: ${alert.metadata}
+  required: false
+  description: 'The alert''s metadata object, as a JSON STRING. Defaults to the alert field of the same name. This is where notification_event_id lives - the only per-occurrence alert identity KOI supplies - so if your correlation rule does not surface a metadata field, repoint this input at whatever field carries the notification id. Leaving it unresolved is safe but disables duplicate suppression in KOI Ext - Alert Triage.'
+  playbookInputQuery: null
 outputs:
 - contextPath: KoiContext
   description: The KOI alert context object, assembled from the alert's own OCSF payload.
@@ -1195,7 +1315,7 @@ outputs:
   description: The flagged item's ID (package / extension / MCP identifier). From observables[name="item.id"].
   type: string
 - contextPath: KoiContext.marketplace
-  description: 'The item''s marketplace, MAPPED to the vocabulary the KOI API accepts (VERIFIED_FACTS 7c). This is the value to pass to koi-inventory-item-get, koi-inventory-item-endpoints-list and koi-blocklist-items-add. Deliberately EMPTY when the event value has no API equivalent (ollama, built_in, side_loaded), when the event carried no marketplace (all 18 MCP alerts), or when KOI introduces a value this map does not know: resolve those with koi-inventory-list(item_id=..., limit=1) and read Koi.Inventory.marketplace.'
+  description: 'The item''s marketplace, MAPPED to the vocabulary the KOI API accepts (VERIFIED_FACTS 7c). This is the value to pass to koi-inventory-item-get, koi-inventory-item-endpoints-list and koi-blocklist-items-add. Deliberately EMPTY when the event value has no API equivalent (ollama, built_in, side_loaded), when the event carried no marketplace (all 21 mcp_server alerts - and no extension alert has arrived since 2026-07-09, so this is now the usual outcome), or when KOI introduces a value this map does not know: resolve those with koi-inventory-list(item_id=..., limit=1) and read Koi.Inventory.marketplace.'
   type: string
 - contextPath: KoiContext.marketplace_raw
   description: 'The marketplace exactly as the event wrote it, before mapping - e.g. "chrome", "software_windows", "built_in". Kept for the record and for correlating back to koi_koi_raw. NEVER pass this to a KOI command; it returns HTTP 400 for every value except npm and pypi.'
@@ -1244,6 +1364,9 @@ outputs:
   type: string
 - contextPath: KoiContext.koi_event_id
   description: KOI scan-batch UUID. Shared across many alerts from the same scan; not a unique alert id.
+  type: string
+- contextPath: KoiContext.notification_id
+  description: 'metadata.notification_event_id - the ONLY per-occurrence alert identity in the KOI Alerts stream (317 distinct over 1,172 rows / 90 days, 100% populated). The integration re-sends every still-open alert once a minute, so many alerts share one notification_id; deduplicate on this and on nothing else. finding_uid is the policy id and koi_event_id is the scan-batch id.'
   type: string
 tags:
 - koi

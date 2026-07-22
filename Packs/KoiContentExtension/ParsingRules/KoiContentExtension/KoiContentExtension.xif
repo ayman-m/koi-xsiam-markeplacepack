@@ -14,24 +14,53 @@
 // chained alter, then use coalesce-of-positions with json_extract_scalar.
 // The pattern is identical in normal XQL and in XQLi, so every expression
 // here can be pasted into a search bar and prototyped against live rows —
-// which is exactly how this version was validated (90 days, 314 Alerts /
-// ~20,215 Audit rows, tenant api-ayman.xdr.eu, 21 July 2026).
+// which is exactly how this version was validated.
+//
+// 🚨 THE ALERTS STREAM IS MASSIVELY DUPLICATED. Read this before trusting any
+// row count in this file. The Marketplace integration re-sends every STILL-OPEN
+// alert on every fetch cycle (eventFetchInterval = 1 minute), so koi_koi_raw
+// holds one row PER ALERT PER FETCH.
+//
+// CANONICAL SNAPSHOT — measured 21 July 2026, tenant api-ayman.xdr.eu,
+// 90-day window. These are the figures used across the whole pack; do not
+// restate this measurement with a different value anywhere else:
+//   Alerts, last 24 h : 734 rows ->     3 distinct notifications (~245x)
+//   Alerts, last 90 d : 1,048 rows ->  317 distinct notifications (~3.3x)
+//   Audit,  last 90 d : 20,148 rows -> 20,148 distinct KOI `id` — NO duplication
+//   Alert cohorts, 90 d: 296 extension (none since 2026-07-09) · 842 mcp_server
+// Audit is unaffected; this is an Alerts-only defect. Every "N/M" coverage
+// figure in the Alerts block below is therefore a count of ROWS, not of alerts,
+// and is only meaningful as a ratio. koi_notification_id (promoted below) is
+// the column that makes real alert counts possible.
+//
+// WHY FIGURES IN THIS FILE MUST CARRY A DATE. The dataset gains rows on every
+// fetch cycle, so the same query run twenty minutes apart returns different
+// absolute numbers — during this validation pass the 90-day Alert row count was
+// read as anything from 1,048 to 1,176. None of those readings is wrong; quoting
+// one of them as an absolute is. The cohort counts (296 + 842) and the
+// whole-stream count (1,048) also came from separate queries and do NOT sum
+// exactly. Quote the date with the number, or do not quote the number.
 //
 // Why coalesce-of-positions instead of arraymap+@element: @element is
 // XQLi-only and cannot be tested in XQL. coalesce+if works in both
 // contexts, so we keep a tight test loop.
 //
-// Position bounds — LIVE-VERIFIED, do not tighten:
+// Position bounds — LIVE-VERIFIED 21 July 2026, do not tighten:
 //   observables max length 7 (idx 0..6); rule scans 0..7 -> 1 spare slot.
 //   resources   max length 3 (idx 0..2); rule scans 0..3 -> 1 spare slot.
-// The coalesce-by-type design is REQUIRED, not stylistic: resources[0].type
-// is "item" on 296 alerts but "mcp" on 18, so any fixed index would read
-// item data on 94% of rows.
+// The coalesce-by-type design is REQUIRED, not stylistic. Live layout of
+// `resources`, 90 days, 21 July 2026:
+//   842 rows: [0]=mcp,  [1]=device                    (mcp_server alerts)
+//   296 rows: [0]=item, [1]=device, [2]=item_instance (extension alerts)
+// So a fixed index 0 would read MCP data on ~74% of rows today and item data on
+// the rest — and the split moves as the population shifts (see the item/MCP
+// note in the resources[type="item"] block). Match on .type, never on position.
 
 [INGEST:vendor="koi", product="koi", target_dataset="koi_koi_raw", no_hit=keep]
 // Audit rows only. The filter is LOAD-BEARING: created_at is present on
-// 20,215/20,215 audit rows but NULL on 314/314 alert rows, so applying this
-// unguarded would null _time on every alert. (Alerts take _time from
+// 20,148/20,148 audit rows but NULL on all 1,048 alert rows (90 days,
+// 21 July 2026), so applying this unguarded would null _time on every alert.
+// (Alerts take _time from
 // finding_info.created_time, which the integration already sets.)
 // Live check: _time already equals created_at truncated to whole seconds on
 // 100/100 sampled audit rows, so this assignment is currently a no-op. It is
@@ -44,13 +73,15 @@ filter source_log_type = "Audit"
 // item_marketplace_api at the foot of the Alerts block for the full rationale.
 //
 // Worth adding here? Yes, and by a wide margin. Live check on the raw `marketplace`
-// column, 90 days (21 July 2026): 13,849 of 20,170 audit rows carry a value, and the
-// SINGLE MOST COMMON one — software_windows, 5,294 rows — is a short form the API
+// column, 90 days, 21 July 2026: ~13,850 of the 20,148 audit rows carry a value
+// (repeated readings the same day ranged 13,800–13,849 as the dataset grew; the
+// PROPORTIONS did not move, and they are what this note is about). The
+// SINGLE MOST COMMON value — software_windows, 5,294 rows — is a short form the API
 // rejects with HTTP 400. Ranked: software_windows 5,294 · pypi 4,674 · chrome 891 ·
 // built_in 828 · npm 775 · software_mac 617 · homebrew 231 · vsc 175 · chocolatey 91 ·
 // cursor 88 · github 65 · edge 48 · firefox 19 · docker 15 · npp 12 · openvsx 10 ·
-// jet 5 · claude_desktop_extensions 5 · ollama 5 · side_loaded 1 · (null 6,321).
-// So 7,136 of the 13,849 populated rows (52%) would 400 if passed through unchanged.
+// jet 5 · claude_desktop_extensions 5 · ollama 5 · side_loaded 1 · (null ~6,300).
+// So ~7,136 of the ~13,850 populated rows (52%) would 400 if passed through unchanged.
 // An audit-driven flow is exactly the case that breaks on the most common value in
 // the whole dataset.
 //
@@ -83,21 +114,91 @@ filter source_log_type = "Audit"
 
 filter source_log_type = "Alerts"
 | alter
-    // finding_info — single JSON object, no cast needed. All 4 resolve
-    // 314/314 on live data.
+    // finding_info — single JSON object, no cast needed. All 3 resolve on
+    // 100% of alert rows on live data (1,048/1,048, 90 d, 21 July 2026), and
+    // all 3 are non-empty on every one of those rows.
+    //
+    // ⚠️ finding_uid IS A POLICY ID, NOT AN ALERT ID. 3 distinct values across
+    // 1,040 alerts: 20940 "MCP Servers alerts", 23300 "NPM Block CS",
+    // 20907 "yito test". It identifies the FINDING DEFINITION that fired,
+    // shared by every alert the same policy ever raises. It is a perfectly good
+    // queryable column for "which policy is noisy" and that is ALL it is. It was
+    // mapped to xdm.alert.original_alert_id until 21 July 2026; THAT MAPPING HAS
+    // BEEN REMOVED AND MUST NOT BE RE-ADDED — see the DO-NOT-RE-ADD note at the
+    // site in the sibling modeling rule, and the "removed mappings" table in
+    // this directory's README.md. Koi supplies no per-alert vendor identifier on
+    // this stream, so the XDM field stays empty on purpose.
     finding_uid           = json_extract_scalar(finding_info, "$.uid"),
     finding_title         = json_extract_scalar(finding_info, "$.title"),
     finding_created_time  = json_extract_scalar(finding_info, "$.created_time"),
-    // finding_info.types has array_length = 1 on 314/314, so arrayindex(...,0)
+    // NOT PROMOTED: finding_info.desc. It resolves on 293 of 1,048 rows (~28%,
+    // 21 July 2026) and
+    // those 293 are exactly the rows where finding_title = "NPM Block CS" — i.e.
+    // the field is POLICY-DEPENDENT, present only when the policy author wrote a
+    // description. It is not a universal alert attribute, so promoting it would
+    // create a column that looks general and is not. Reach for it inline
+    // (json_extract_scalar(finding_info, "$.desc")) if you are already scoped to
+    // one policy.
+    // finding_info.types has array_length = 1 on 100% of rows (1,048/1,048,
+    // 21 July 2026), so arrayindex(...,0)
     // discards nothing. NOTE: alert_type has exactly ONE distinct value in 90
     // days of live data — "policy_violation". Anything downstream that branches
     // on alert_type has nothing to branch on today. (This column is created
     // here; the raw koi_koi_raw column of the same name is always null.)
     alert_type            = arrayindex(json_extract_scalar_array(finding_info, "$.types"), 0),
+    // ── metadata — a PLAIN OBJECT, not an array ────────────────────────
+    // Live shape, verbatim: {"version":"1.7.0","product":{"name":"Koi",
+    // "vendor_name":"Koi"},"notification_event_id":"84d52bf1-…"}. Because it is
+    // a plain object, a single json_extract_scalar suffices — no to_json_string
+    // cache and no coalesce-of-positions. Do not "make it consistent" with the
+    // array handling above; that would be pure cost.
+    //
+    // 🔑 koi_notification_id IS THE DEDUPE KEY. DO NOT REMOVE IT AS REDUNDANT.
+    // The integration re-sends every still-open alert on every 1-minute fetch,
+    // so a row is a FETCH, not an alert. Measured 21 July 2026, 90 days:
+    //   1,048 rows -> 317 distinct notification_event_id (~3.3x). 317 held
+    //   steady across repeated measurements while the row count grew.
+    //   Last 24 h: 734 rows -> 3 distinct. That is ~245x inflation.
+    // Candidate keys, same window, so nobody re-litigates this:
+    //   _id                     1,048 distinct — the ROW; counts every duplicate
+    //   koi_notification_id       317 distinct — the ALERT OCCURRENCE ✅
+    //   koi_event_id               20 distinct — the SCAN BATCH; far too coarse
+    //   finding_uid                 3 distinct — the POLICY; not an identity
+    // Hierarchy: scan batch (20) ⊃ notification (317) ⊃ rows (1,048).
+    // notification_event_id is a verified 1:1 identity for the tuple
+    // (item.id, device.id, finding_info.uid, finding_info.created_time) —
+    // 317 ids, 317 tuples, zero collisions in either direction.
+    //
+    // CONSEQUENCE: every widget, report or playbook that counts alerts must use
+    // count_distinct(koi_notification_id). A plain count() over Alerts is wrong
+    // by two orders of magnitude — 734 versus 3 over the last 24 h.
+    // Note the duplication is not uniform: over 90 days the 296 extension rows
+    // carry 296 distinct notifications (1.0x, none) while the 842 mcp_server
+    // rows carry 21 (~40x). The MCP cohort is the one being re-sent, because
+    // those are the alerts that stay open.
+    // 100% populated and non-empty on every alert row (21 July 2026).
+    // On HISTORICAL rows this column is null — parsing rules apply at ingest
+    // only — so dedupe over old data with the inline
+    // json_extract_scalar(metadata, "$.notification_event_id"). That is what the
+    // dashboard widgets do.
+    koi_notification_id   = json_extract_scalar(metadata, "$.notification_event_id"),
+    // koi_product_version — A CHANGE DETECTOR, NOT AN ANALYTIC DIMENSION.
+    // Constant "1.7.0" on 100% of alert rows (1 distinct value across the 1,048
+    // rows of the 21 July 2026 snapshot), so it partitions
+    // nothing and no dashboard should group by it. It is promoted because this
+    // pack has already been burned once by an UNDATED, UNANNOUNCED Koi-side
+    // change — koi_tenant_name / koi_customer_id stopped being emitted mid-July
+    // 2026 and the only way to date the cut-over was to bisect _insert_time by
+    // hand (see the regression note in the modeling rule). With this column,
+    // that class of investigation becomes one query:
+    //   comp count(), min(_time), max(_time) by koi_product_version
+    // The day it stops reading 1.7.0, the payload shape may have moved and every
+    // extraction in this file is worth re-validating.
+    koi_product_version   = json_extract_scalar(metadata, "$.version"),
     // Cache the JSON-string form of the array-typed columns.
     // NOTE: on this dataset `resources` and `observables` are ALREADY JSON
     // strings, so to_json_string() is a verbatim identity no-op (verified
-    // byte-for-byte, 314/314). This stage CACHES, it does not normalise —
+    // byte-for-byte on every alert row). This stage CACHES, it does not normalise —
     // and it is what makes the rule prototypable in plain XQL.
     resources_str         = to_json_string(resources),
     observables_str       = to_json_string(observables)
@@ -124,6 +225,27 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(observables_str, "$.5.name")="item.type", json_extract_scalar(observables_str, "$.5.value"), null),
         if(json_extract_scalar(observables_str, "$.6.name")="item.type", json_extract_scalar(observables_str, "$.6.value"), null),
         if(json_extract_scalar(observables_str, "$.7.name")="item.type", json_extract_scalar(observables_str, "$.7.value"), null)),
+    // ⚠️ alert_item_version — EMPTY-STRING GUARDED. Do not simplify this back to
+    // a bare coalesce. MCP alerts carry the observable {"name":"item.version",
+    // "value":""} — the KEY IS PRESENT, so the value passes every `!= null` test
+    // while being useless. Live, 90 days, 21 July 2026:
+    //   extension  :   296 rows, 296 non-null, 296 genuinely populated
+    //   mcp_server :   842 rows, 842 non-null,  11 genuinely populated (1.3%)
+    // Ungrouped that is 831 empty strings masquerading as data on ~73% of alert
+    // rows — a "group by item version" widget produces one giant blank bucket.
+    // The coalesce below is UNCHANGED; the guard is a SAME-NAME REASSIGNMENT in
+    // a later alter stage (see "alert_item_version — empty-string guard" further
+    // down), because a column cannot be read in the stage that creates it. That
+    // keeps this chain readable and adds no extra dataset column.
+    // Post-guard, live-validated 21 July 2026: 307 populated, ZERO empty
+    // strings, 253 distinct versions — extension 296/296 unchanged,
+    // mcp_server 842 -> 11. Nothing that had a value lost one.
+    //
+    // This is the ONLY column in the pack with this defect. Every other promoted
+    // alert column was re-tested with `x != null and x != ""` on 21 July 2026 and
+    // came back with zero empty strings — see the audit list at the foot of this
+    // file. Test both conditions when you add a column; `!= null` alone is not
+    // a population check on this feed.
     alert_item_version = coalesce(
         if(json_extract_scalar(observables_str, "$.0.name")="item.version", json_extract_scalar(observables_str, "$.0.value"), null),
         if(json_extract_scalar(observables_str, "$.1.name")="item.version", json_extract_scalar(observables_str, "$.1.value"), null),
@@ -133,8 +255,15 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(observables_str, "$.5.name")="item.version", json_extract_scalar(observables_str, "$.5.value"), null),
         if(json_extract_scalar(observables_str, "$.6.name")="item.version", json_extract_scalar(observables_str, "$.6.value"), null),
         if(json_extract_scalar(observables_str, "$.7.name")="item.version", json_extract_scalar(observables_str, "$.7.value"), null)),
-    // item_marketplace — NEW in this pack. 296/314 (npm 293, chrome 3); absent
-    // on the 18 MCP alerts. Operationally important: `marketplace` is a
+    // item_marketplace — NEW in this pack. Populated on 296 rows (npm 293,
+    // chrome 3), zero empty strings; absent on the 842 mcp_server rows, which
+    // carry no item.marketplace observable.
+    // ⚠️ COVERAGE RESTATED 21 July 2026: this used to read "296/314 (94%)". The
+    // alert population has SHIFTED — see the item/MCP note in the
+    // resources[type="item"] block — and it is now 296 of 1,048 rows (~28%,
+    // 21 July 2026), with NO extension alert since 2026-07-09. The column is NOT
+    // broken; the cohort that populates it has stopped arriving and may return.
+    // Operationally important: `marketplace` is a
     // REQUIRED argument on koi-inventory-item-get and
     // koi-inventory-item-endpoints-list, and nothing else in the alert payload
     // supplies it. Without this column an alert cannot be enriched back
@@ -172,11 +301,15 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(observables_str, "$.5.name")="device.serial", json_extract_scalar(observables_str, "$.5.value"), null),
         if(json_extract_scalar(observables_str, "$.6.name")="device.serial", json_extract_scalar(observables_str, "$.6.value"), null),
         if(json_extract_scalar(observables_str, "$.7.name")="device.serial", json_extract_scalar(observables_str, "$.7.value"), null)),
-    // koi_event_id — populated 314/314, but only 18 DISTINCT values across
-    // those 314 rows: it is a per-SCAN-BATCH UUID, not a per-occurrence one
-    // (~17.4 alert rows share each value). It is promoted as a BATCH
-    // CORRELATOR only. It is deliberately NOT used as xdm.event.id in the
-    // modeling rule — see KoiContentExtension ModelingRules.
+    // koi_event_id — populated on every alert row and never empty, but only
+    // 20 DISTINCT values across 1,048 rows (re-measured 21 July 2026): it is a
+    // per-SCAN-BATCH UUID, not a per-occurrence one (~52 rows share each value).
+    // It is promoted as a BATCH CORRELATOR only.
+    // It is NOT the dedupe key either — the batch is COARSER than the alert:
+    // 20 batches ⊃ 317 notifications ⊃ 1,048 rows. Use koi_notification_id to
+    // count alerts, koi_event_id only to ask "what else came in this scan".
+    // It is deliberately NOT used as xdm.event.id in the modeling rule —
+    // see KoiContentExtension ModelingRules.
     koi_event_id = coalesce(
         if(json_extract_scalar(observables_str, "$.0.name")="event.id", json_extract_scalar(observables_str, "$.0.value"), null),
         if(json_extract_scalar(observables_str, "$.1.name")="event.id", json_extract_scalar(observables_str, "$.1.value"), null),
@@ -188,7 +321,12 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(observables_str, "$.7.name")="event.id", json_extract_scalar(observables_str, "$.7.value"), null)),
 
     // ── resources[] where .type="device" — positions 0..3 ──────────────
-    // All six below verified 314/314.
+    // All six below verified on 100% of alert rows (1,048/1,048), zero empty
+    // strings (90 d, 21 July 2026). They are the only alert columns that
+    // populate across BOTH the extension and mcp_server cohorts.
+    // NOTE for anyone tempted to map alert_hostname to xdm.target.host.fqdn:
+    // that mapping existed and was REMOVED 21 July 2026. Hostnames contain a dot
+    // on 0 of 1,138 rows — they are bare names. Do not re-add it.
     device_id = coalesce(
         if(json_extract_scalar(resources_str, "$.0.type")="device", json_extract_scalar(resources_str, "$.0.data.id"), null),
         if(json_extract_scalar(resources_str, "$.1.type")="device", json_extract_scalar(resources_str, "$.1.data.id"), null),
@@ -221,14 +359,36 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.3.type")="device", json_extract_scalar(resources_str, "$.3.data.registered_at"), null)),
     // DROPPED: device_network_user (was resources[device].data.network_user).
     // The key exists on every device resource but its value is literally null
-    // on 314/314 alerts. Not emitted by Koi as of 2026-07.
+    // on every alert row. Not emitted by Koi as of 2026-07.
 
     // ── resources[] where .type="item" — positions 0..3 ────────────────
     // NEW in this pack. The custom pack's rule never touched
-    // resources[type="item"] at all, despite it being present on 296 of 314
-    // alerts (94%) — the largest untapped surface in the payload.
-    // All three below verified 296/296 extension alerts (null on the 18 MCP
-    // alerts, which carry no "item" resource).
+    // resources[type="item"] at all, and when this pack added it that block was
+    // the largest untapped surface in the payload.
+    //
+    // ⚠️ THE ALERT POPULATION HAS SHIFTED — READ BEFORE "FIXING" THESE COLUMNS.
+    // Measured 21 July 2026 over 90 days; the earlier figure in this comment
+    // ("296 of 314, 94%") is stale and is corrected here:
+    //   extension  :   296 rows | LAST SEEN 2026-07-09 — nothing for 12 days
+    //   mcp_server :   842 rows | current; effectively 100% of live ingestion
+    // So item_package_name, item_risk_level, item_criticality, item_marketplace
+    // and (downstream) xdm.target.resource.sub_type are NULL ON ALL CURRENT DATA.
+    // That is 296 of 1,048 rows (~28%), not 94%.
+    //
+    // THESE COLUMNS ARE KEPT DELIBERATELY. They are not broken mappings — the
+    // cohort that populates them stopped arriving and may return the moment an
+    // extension policy fires again. Do not delete them because a 24-hour query
+    // shows them empty.
+    //
+    // NOT a substitute: resources[type=mcp].data.marketplace exists on MCP
+    // alerts and is already in the API long vocabulary, but it is the EMPTY
+    // STRING on ~99% of the MCP cohort (measured 21 July 2026; the reading was
+    // 705 of 716 rows on one query and 843 of 854 on a later one — the RATIO is
+    // the stable fact). Wiring it in would need an explicit `!= ""` guard and
+    // would still cover ~1% of that cohort, so it is left unpromoted.
+    //
+    // All three below verified on 296/296 extension rows, zero empty strings
+    // (null on the 842 mcp_server rows, which carry no "item" resource).
     item_package_name = coalesce(
         if(json_extract_scalar(resources_str, "$.0.type")="item", json_extract_scalar(resources_str, "$.0.data.package_name"), null),
         if(json_extract_scalar(resources_str, "$.1.type")="item", json_extract_scalar(resources_str, "$.1.data.package_name"), null),
@@ -248,7 +408,12 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.3.type")="item", json_extract_scalar(resources_str, "$.3.criticality"), null)),
 
     // ── resources[] where .type="mcp" — positions 0..3 ─────────────────
-    // Denominator for every "N/18" below is the 18 MCP alerts.
+    // ⚠️ DENOMINATOR CORRECTED 21 July 2026. This block used to say "the 18 MCP
+    // alerts". It is now 842 mcp_server ROWS over 90 days — but see the
+    // duplication banner at the top of this file: those 842 rows are only 21
+    // distinct notifications. The MCP cohort is both the largest AND the most
+    // heavily re-sent. Every "N/842" below is a ROW count.
+    // All eight columns below verified zero empty strings on 21 July 2026.
     mcp_id = coalesce(
         if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.mcp_id"), null),
         if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.mcp_id"), null),
@@ -269,8 +434,10 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.data.transport"), null),
         if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.data.transport"), null),
         if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.transport"), null)),
-    // mcp_url is CORRECTLY SPARSE, not broken: populated 2/18, exactly the two
-    // rows where mcp_type = "remote" (a local stdio MCP server has no URL).
+    // mcp_url is CORRECTLY SPARSE, not broken: populated on 2 of the 842 mcp rows,
+    // exactly the rows where mcp_type = "remote" (a local stdio MCP server has
+    // no URL). The absolute count has not moved as the cohort grew, which is
+    // itself the evidence that remote MCP servers are genuinely rare here.
     // Keep it — it is the only network indicator on an MCP alert.
     mcp_url = coalesce(
         if(json_extract_scalar(resources_str, "$.0.type")="mcp", json_extract_scalar(resources_str, "$.0.data.url"), null),
@@ -289,10 +456,11 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.data.risk_status"), null)),
     // DROPPED: mcp_package_type (was resources[mcp].data.package_type) and
     // mcp_installation_method (was resources[mcp].data.installation_method).
-    // Neither key exists under .data on any MCP resource — 0/18. The complete
-    // observed .data key set is: mcp_id, name, version, marketplace, mcp_type,
-    // transport, package_name, risk_level, risk_status, risk, url. Not emitted
-    // by Koi as of 2026-07.
+    // Neither key exists under .data on any MCP resource — 0 of 842 rows,
+    // re-checked 21 July 2026 against the far larger current cohort. The
+    // complete observed .data key set is: mcp_id, name, version, marketplace,
+    // mcp_type, transport, package_name, risk_level, risk_status, risk, url.
+    // Not emitted by Koi as of 2026-07.
     //
     // mcp_criticality lives on the resource WRAPPER, not under .data.
     mcp_criticality = coalesce(
@@ -300,6 +468,24 @@ filter source_log_type = "Alerts"
         if(json_extract_scalar(resources_str, "$.1.type")="mcp", json_extract_scalar(resources_str, "$.1.criticality"), null),
         if(json_extract_scalar(resources_str, "$.2.type")="mcp", json_extract_scalar(resources_str, "$.2.criticality"), null),
         if(json_extract_scalar(resources_str, "$.3.type")="mcp", json_extract_scalar(resources_str, "$.3.criticality"), null))
+// ── alert_item_version — empty-string guard. ───────────────────────────────
+// A SEPARATE alter stage, and a SAME-NAME REASSIGNMENT: alert_item_version is
+// created by the stage above and a column cannot be read in the stage that
+// creates it. The full rationale is on the coalesce itself — short version:
+// MCP alerts send {"name":"item.version","value":""}, so the key is present and
+// `!= null` passes on 100% of rows while ~73% of them hold nothing (831 of the
+// 842 mcp_server rows, 90 days, 21 July 2026).
+//
+// DO NOT DELETE THIS STAGE. Without it every population audit, every
+// "group by version" widget and every playbook branch that tests
+// `alert_item_version != null` is wrong on the entire MCP cohort — which is
+// effectively all current ingestion.
+//
+// Live-validated 21 July 2026 (90 d): before, non-null on 100% of alert rows of
+// which 831 were the empty string; after, 307 populated, 0 empty, 253 distinct.
+// Extension rows are untouched (296 -> 296); the mcp_server cohort drops
+// 842 -> 11, which is the true count.
+| alter alert_item_version = if(alert_item_version != "", alert_item_version, to_string(null))
 // ── item_marketplace_api — NEW. The command-safe marketplace value. ─────────
 // A SEPARATE alter stage because it consumes item_marketplace, which is created
 // by the stage above. Same reason the resources_str/observables_str cache is its
@@ -325,9 +511,12 @@ filter source_log_type = "Alerts"
 //   built_in 829 · ollama 5 · side_loaded 1 -> NULL, no API equivalent.
 //
 // ON ALERTS SPECIFICALLY the exposure is small but real: item_marketplace is
-// npm on 293 rows and chrome on 3 (296 of 314 alerts; null on the 18 MCP alerts,
-// which carry no item.marketplace observable). Only the 3 chrome rows are wrong
-// today — but they are wrong 100% of the time, and silently.
+// npm on 293 rows and chrome on 3 — 296 of 1,048 alert rows (~28%, corrected
+// 21 July 2026 from a stale "296 of 314"); null on the 842 mcp_server rows,
+// which carry no item.marketplace observable. Only the 3 chrome rows are wrong
+// today — but they are wrong 100% of the time, and silently. Note that no
+// extension alert has arrived since 2026-07-09, so on CURRENT data this whole
+// branch is dormant rather than busy; it is kept for when the cohort returns.
 //
 // EVIDENCE THAT THE MAPPING TABLE IS RIGHT, not merely plausible: the alert
 // payload carries the SAME field twice in TWO DIFFERENT vocabularies.
@@ -367,3 +556,78 @@ filter source_log_type = "Alerts"
     // A playbook must treat null here as "cannot call an item-scoped command",
     // NOT as "try the raw value instead".
     to_string(null));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EMPTY-STRING AUDIT — ALL 31 promoted Alerts columns, 90 days, 21 July 2026.
+// This table is EXHAUSTIVE: if you add a column above, add a row here.
+// Tested with BOTH conditions (`x != null` AND `x != ""`), because on this feed
+// the first alone is not a population check. Reproduce with:
+//   ... | comp sum(if(col != null, 1, 0)) as nn, sum(if(col = "", 1, 0)) as mt
+//
+// Denominators are the canonical 21 July 2026 snapshot from the banner at the
+// top of this file: 1,048 alert rows over 90 days, of which 296 are the
+// extension cohort and 842 the mcp_server cohort. Whole-stream and per-cohort
+// figures came from separate queries and do NOT sum exactly — the dataset gains
+// rows on every fetch cycle. What each row asserts is the RATIO (100% of rows,
+// or 100% of one cohort), and the ratios are stable.
+//
+//   column                  populated  empty ""   verdict
+//   ─────────────────────── ────────── ────────── ─────────────────────────────
+//   finding_uid              1,048          0     clean (3 distinct = policy id)
+//   finding_title            1,048          0     clean
+//   finding_created_time     1,048          0     clean
+//   alert_type               1,048          0     clean (1 distinct)
+//   koi_notification_id      1,048          0     clean (317 distinct) ← key
+//   koi_product_version      1,048          0     clean (1 distinct, "1.7.0")
+//   item_id                  1,048          0     clean
+//   item_type                1,048          0     clean
+//   alert_item_version       1,048        831     ⚠️ GUARDED ABOVE -> 307 / 0
+//   item_marketplace           296          0     clean (extension cohort only)
+//   item_marketplace_api       296          0     clean (extension cohort only)
+//   device_os_obs            1,048          0     clean
+//   device_serial            1,048          0     clean
+//   koi_event_id             1,048          0     clean (20 distinct = batch)
+//   device_id                1,048          0     clean
+//   alert_hostname           1,048          0     clean (0 contain a dot —
+//                                          that is why fqdn is unmapped)
+//   device_last_seen         1,048          0     clean
+//   device_last_user         1,048          0     clean
+//   device_status            1,048          0     clean
+//   device_registered_at     1,048          0     clean
+//   item_package_name          296          0     clean (extension cohort only)
+//   item_risk_level            296          0     clean (extension cohort only)
+//   item_criticality           296          0     clean (extension cohort only)
+//   mcp_id                     842          0     clean (mcp cohort only)
+//   mcp_package_name           842          0     clean (mcp cohort only)
+//   mcp_type                   842          0     clean (mcp cohort only)
+//   mcp_transport              842          0     clean (mcp cohort only)
+//   mcp_url                      2          0     clean (correctly sparse)
+//   mcp_risk_level             842          0     clean (mcp cohort only)
+//   mcp_risk_status            842          0     clean (mcp cohort only)
+//   mcp_criticality            842          0     clean (mcp cohort only)
+//   ─────────────────────── ────────── ────────── ─────────────────────────────
+//   31 columns. Plus 2 working intermediates that also persist as dataset
+//   columns and are not audited here: resources_str / observables_str.
+//   The Audit statement's marketplace_api is audited with the Audit block, not
+//   here — this table is the ALERTS surface.
+//
+// ON item_marketplace_api SPECIFICALLY (added to this table 21 July 2026, having
+// been omitted while the table claimed to be exhaustive): it is PROVABLY SAFE
+// without a live re-measurement. It is a pure function of item_marketplace, and
+// every branch of that function returns either a non-empty literal, a
+// non-empty passthrough of item_marketplace, or to_string(null). There is no
+// path that yields "". An empty item_marketplace would match NO branch — not the
+// ten equality tests, not the 22-value whitelist — and fall through to
+// to_string(null); and item_marketplace itself has zero empty strings (row
+// above). So: 296 populated, 0 empty, matching its source column exactly
+// (293 npm -> npm, 3 chrome -> chrome_web_store).
+//
+// Not promoted, and why:
+//   finding_info.desc               293/1,048 — POLICY-DEPENDENT (only
+//                                   "NPM Block CS"), not a universal attribute.
+//   resources[mcp].data.marketplace non-null across the mcp cohort but ~99%
+//                                   EMPTY — fails the empty-string test, so it
+//                                   is not a substitute for item_marketplace.
+//   resources[item_instance].*      present at position 2 on extension rows;
+//                                   unexamined, out of scope for this pass.
+// ═══════════════════════════════════════════════════════════════════════════

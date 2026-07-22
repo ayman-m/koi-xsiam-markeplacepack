@@ -676,6 +676,64 @@ identity and must not be `original_alert_id`. `notification_event_id` is the cor
 
 ---
 
+## 7f. Capability audit — field-level compliance **[LIVE]**
+
+Command-level compliance was already clean. This is the field- and value-level pass, and it found
+four classes of problem that a "does the command exist" check cannot see.
+
+### 7f.1 ⚠️ The empty string defeats null-checks
+
+`alert_item_version` (from `observables[name="item.version"]`) over 90 days:
+
+| Item type | Rows | Passes `!= null` | Actually has a value |
+|---|---|---|---|
+| `extension` | 296 | 296 | 296 |
+| **`mcp_server`** | **842** | **842 (100 %)** | **11 (1.3 %)** |
+
+MCP alerts carry `{"name":"item.version","value":""}` — the key is present, so every
+population test passes, while the value is useless. **This is the only field in the pack where the
+standard `x != null` test gives a false pass**; every other promoted alert column was re-checked
+for empty strings and came back clean.
+
+Any population audit must test `x != null and x != ""`. A widget grouping by item version
+currently produces one giant empty-string bucket.
+
+### 7f.2 `xdm.target.host.fqdn` is not an FQDN
+
+`hostname` contains a dot on **0 of 1,138 alert rows**. Values are bare NetBIOS-style or human
+names (`M-HFQQ44F5XF`, `Gary的MacBook Air`). Mapping it to `fqdn` is worse than leaving it null: a
+cross-source join on `fqdn` silently mismatches. `xdm.target.host.hostname` already carries it
+correctly.
+
+### 7f.3 The alert population has changed shape
+
+| Item type | Alerts (90 d) | Last seen |
+|---|---|---|
+| `extension` | 296 | **2026-07-09** — nothing for 12 days |
+| `mcp_server` | 842 | current — effectively all recent ingestion |
+
+Consequence: every column derived from the *item* resource — `item_marketplace`,
+`item_package_name`, `item_risk_level`, and `xdm.target.resource.sub_type` — is null on current
+data. These are **not** broken mappings; the cohort that populates them has stopped arriving. Keep
+them, but the in-file comments claiming "296/314 (94 %)" and "the 18 MCP alerts" are now badly
+stale — it is 296/1,138 (26 %) and 842 MCP alerts.
+
+MCP alerts do carry `resources[type=mcp].data.marketplace`, already in the API long vocabulary,
+but it is the **empty string on 705 of 716** — so it is not a usable substitute today, and any use
+of it needs an explicit empty-string guard.
+
+### 7f.4 `xdm.alert.original_alert_id` maps a policy id
+
+Confirmed independently of §7e.3: `finding_info.uid` has **3 distinct values across 1,040 alerts**
+(1 across the last 6 hours) — `20940 "MCP Servers alerts"`, `23300 "NPM Block CS"`,
+`20907 "yito test"`. These are policy identifiers, not alert identifiers.
+
+This is the **same defect the rule explicitly avoided** for `xdm.event.id` — the comment there
+correctly rejects `koi_event_id` as too coarse (20 distinct / 1,040) and uses `_id` instead. The
+trap was sidestepped in one place and walked into in another.
+
+---
+
 ## 8. Carried forward from the custom-pack investigation
 
 These are pack-independent (`SESSION_BRIEF.md` §6) and were **not** re-verified in this session.
