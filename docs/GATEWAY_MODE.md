@@ -49,11 +49,22 @@ XSIAM**. `koi_koi_raw` has no gateway/block/network event type at all, and
 **Therefore:** every gateway detection in this pack targets the *consequences* of a block —
 approval requests, remediations, and provenance gaps — never the block itself.
 
-### 2.2 Enforcement is at package download, not at browsing
+### 2.2 Enforcement happens at BOTH the store page and the package download
 
-Browsing an item's store page passes straight through. The decision happens when the client
-fetches the actual package — e.g. `clients2.googleusercontent.com/crx/blobs/…` for a Chrome
-extension. This is why a block cannot be reproduced by loading a store page.
+⚠️ **Corrected 2026-07-23.** An earlier version of this guide said enforcement was "at package
+download, not browsing". That was wrong — it was inferred from one VS Code marketplace page loading
+normally, when in fact that extension just wasn't blocked for that device.
+
+Live-observed block points:
+- **Store detail page** — `chromewebstore.google.com/detail/<slug>/<id>/should-request-access`.
+  The gateway rewrites the URL with `/should-request-access`, which is how the block page offers the
+  request flow.
+- **Package download** — `clients2.googleusercontent.com/crx/blobs/…`.
+- **Code-package registry** — `registry.npmjs.org/<pkg>`. This host is **not in the PAC**; it is
+  enforced by Koi's separate **registry** integration (npm/pip config). Two independent paths.
+
+On a blocked row, `Method`/`Status Code` are unavailable "because the request was blocked by the
+gateway".
 
 ### 2.3 A blocked item is never in inventory
 
@@ -109,9 +120,29 @@ dataset = koi_koi_raw
 ### The one number to quote
 
 Over 90 days on this tenant, **≈3,088 installs were outside PAC scope versus ≈230 inside** —
-roughly **nine in ten** installs with a known marketplace never traverse the gateway. The gateway
-governs the **browser/IDE extension surface**, not the code-package surface. Say this before
-anyone concludes "the gateway will stop supply-chain installs".
+roughly **nine in ten** installs with a known marketplace never traverse the **PAC**. Say this
+before anyone concludes "the PAC will stop supply-chain installs".
+
+**But do not present that as unprotected surface.** For npm and PyPI, KOI does policy-based
+prevention **at install time** "as long as the Koi Proxy is configured" — and **without the endpoint
+script**. The gap is a **PAC delivery** limit, not a capability limit: a PAC is a browser/OS-proxy
+mechanism and `npm`/`pip` do not read it, which is why KOI's docs say to deploy registry config when
+*"You use a PAC file integration and CLI tools (pip, npm) do not inherit proxy settings"*. Adding the
+registry hosts to the PAC would not help.
+
+Three documented script-free routes to govern npm/PyPI:
+1. **SWG layer** — route the registry hosts to KOI at the gateway/SASE tier. KOI: *"This handles
+   routing and trust automatically without per-tool configuration."* A Prisma Access / Zscaler /
+   Netskope customer already has this tier.
+2. **Repository manager** — configure KOI as an **upstream registry** on Artifactory / Nexus.
+3. **Per-endpoint** `.npmrc` / `pip.conf` pushed by MDM.
+
+Live proof via route 3 on this tenant: `Blocked · NPM · registry.npmjs.org /lodash-es`.
+
+⚠️ **The code-package path needs no Koi Root CA.** *"Koi serves TLS from a certificate signed by a
+globally recognized Root CA. No additional trust configuration is required."* KOI acts as a registry
+endpoint there, not a TLS interceptor — so the CA deployment conversation applies to the
+**marketplace** path only.
 
 ---
 

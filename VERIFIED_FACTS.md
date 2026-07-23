@@ -818,13 +818,30 @@ What does arrive (all `source_log_type = "Audit"`): `extensions/installed|uninst
 `policies/created|updated|allowlist_items_added`, `guardrails/enabled|disabled|updated`,
 `notifications/email_sent`, `approval_requests`.
 
-### 9.3 Enforcement is at package download, not at browsing
+### 9.3 Enforcement happens at BOTH the store detail page and the package download
 
-Browsing an item's store page passes through untouched (verified: the VS Code marketplace page
-for `oderwat.indent-rainbow` rendered normally through the gateway). Blocks are logged against
-the CRX blob host — live rows: `Blocked · Chrome · clients2.googleusercontent.com ·
-/crx/blobs/… · "Google Docs Offline" · ghbmnnjooekpmoecnnnilnnbdlolhkhi · 1.108.1.0`,
-`Reason: Extension not allowed`.
+⚠️ **CORRECTED 23 July 2026 (same day).** An earlier draft of this section claimed "enforcement is
+at package download, not at browsing". That was WRONG, and the way it was wrong is instructive: it
+was inferred from a single VS Code marketplace page (`oderwat.indent-rainbow`) rendering normally
+through the gateway — but that extension was simply **not blocked for that device**. "Not blocked"
+was mistaken for "browsing is not enforced". Do not re-introduce the claim.
+
+Operator-driven testing produced blocks at **both** enforcement points:
+- **Store detail page** — `Blocked · Chrome · chromewebstore.google.com ·
+  /detail/snake/oppflpnigmhkldmdmmbnopidlhahanji/should-request-access`. Note the
+  **`/should-request-access`** suffix: the gateway rewrites the blocked store URL, which is how the
+  block page presents the request-access flow.
+- **Package download** — `Blocked · Chrome · clients2.googleusercontent.com · /crx/blobs/… ·
+  "Google Docs Offline" · ghbmnnjooekpmoecnnnilnnbdlolhkhi · 1.108.1.0`.
+- **Code-package registry** — `Blocked · NPM · registry.npmjs.org · /lodash-es`. `registry.npmjs.org`
+  is **not in the PAC**, so this block came through Koi's separate **registry** integration
+  (npm/pip config), not the proxy. Two distinct enforcement paths coexist.
+
+All carry `Reason: Extension not allowed` — including the npm one, where "Extension" is plainly the
+wrong noun for a code package. Minor Koi defect; the reason string appears hardcoded.
+
+On a blocked row, `Method` and `Status Code` read: *"Method and status code are not available because
+the request was blocked by the gateway."*
 
 ### 9.4 `approval_requests` is the only observable proxy for a block — and `action` is null
 

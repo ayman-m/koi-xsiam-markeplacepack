@@ -9,8 +9,29 @@
    incident. The gateway is a proxy: it can only govern hosts the PAC routes to it. The
    live PAC (assets.koi.security/pac/16671441-....pac) routes browser stores, IDE
    marketplaces, Hugging Face and the GitHub MCP registry. It does NOT route PyPI, npm,
-   Homebrew, Chocolatey, Docker, OS software channels, or anything sideloaded - those are
-   governed, if at all, by Koi's separate REGISTRY approach (pip/npm config), not the PAC.
+   Homebrew, Chocolatey, Docker, OS software channels, or anything sideloaded.
+
+   ⚠️ "OUTSIDE PAC SCOPE" IS NOT "UNGOVERNABLE" - never quote this number as a Koi coverage
+   limit. For npm and PyPI, Koi supports policy-based prevention AT INSTALL TIME "as long as
+   the Koi Proxy is configured", and it does NOT require the endpoint script. The gap is a PAC
+   DELIVERY limit, not a capability limit: a PAC file is a browser/OS-proxy mechanism and the
+   CLI tools do not read it. Koi's own docs say to deploy registry config when "You use a PAC
+   file integration and CLI tools (pip, npm) do not inherit proxy settings" - so adding the
+   registry hosts to the PAC would NOT help. Three documented routes govern npm/PyPI, none of
+   them needing the script:
+     1. SWG layer    - route the registry hosts to Koi at the gateway/SASE tier. Koi's docs:
+                       "This handles routing and trust automatically without per-tool
+                       configuration." This is the route a Prisma Access / Zscaler / Netskope
+                       customer already has in place.
+     2. Repo manager - configure Koi as an UPSTREAM registry on Artifactory / Nexus.
+     3. Endpoint     - per-tool .npmrc / pip.conf pushed by MDM.
+   Live proof on this tenant 2026-07-23, via route 3: Blocked - NPM - registry.npmjs.org
+   /lodash-es. Note the code-package path needs NO Koi Root CA - Koi serves a globally trusted
+   certificate there because it acts as a registry endpoint, not a TLS interceptor. The CA
+   requirement applies to the MARKETPLACE path only.
+
+   So read this as "how much of the estate the PAC alone does not reach", and pair it with the
+   routing decision above rather than presenting it as unprotected surface.
 
    Live result 2026-07-23 (90 d), 12 rows - installs / distinct items:
      pypi 1788/539 · npm 437/246 · software_windows 351/127 · software_mac 171/97
