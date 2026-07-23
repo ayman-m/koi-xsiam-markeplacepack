@@ -784,3 +784,89 @@ Mark them as inherited wherever they are used:
   `-EncodedCommand`.
 - Install path decides event collection: a pack zip built for the wrong marketplace target carries
   `isfetchevents: false` and ships no rules.
+
+---
+
+## 9. The Supply Chain Gateway — end-to-end test, 23 July 2026 **[LIVE]**
+
+Tested on tenant `paet` (paet.koi.security) with the gateway PAC + Koi Root CA deployed on a
+macOS host. The install step was performed **by the operator in Chrome** — an automated browser
+cannot do it (see 9.6).
+
+### 9.1 What the gateway is, and what it covers
+
+An HTTPS-intercepting forward proxy at `paet.gateway.koi.security` (port from the DNS marker
+`proxy.koisecurity.com`, default 8090). The PAC
+(`assets.koi.security/pac/16671441-dbd0-409e-9478-5d5c54ed741b.pac`) routes **only** browser
+stores (Chrome/Edge/Firefox + `clients2.google.com`), IDE marketplaces (VS Code + vsassets CDNs,
+Cursor, Windsurf, JetBrains, OpenVSX), Hugging Face, `api.mcp.github.com`, Office add-ins and
+`storage.googleapis.com`. Everything else is `DIRECT`.
+
+The `cid` in the PAC filename is the tenant id: it reappears as `koi_customer_id`
+`16671441-dbd0-409e-9478-5d5c54ed741b` in `koi_koi_raw` and in the block page's request URL.
+
+### 9.2 🚨 The gateway's verdict log NEVER reaches XSIAM
+
+The console shows every intercepted request under **Audit → Network Logs** with
+`Action (Allowed|Blocked) · Source · Domain · Path · Name · Item ID · Version · Method ·
+Status Code · Reason · Group · Identity`. **None of it is exported.** `koi_koi_raw` over 30 days
+carries 17 distinct `(type, action)` pairs and not one is a gateway/block/network type;
+`_raw_log contains "Blocked"` returns **0 rows**. **You cannot alert on a block.**
+
+What does arrive (all `source_log_type = "Audit"`): `extensions/installed|uninstalled|updated`,
+`devices/archived|unarchived`, `remediation/remediation_opened|executed|pending`,
+`policies/created|updated|allowlist_items_added`, `guardrails/enabled|disabled|updated`,
+`notifications/email_sent`, `approval_requests`.
+
+### 9.3 Enforcement is at package download, not at browsing
+
+Browsing an item's store page passes through untouched (verified: the VS Code marketplace page
+for `oderwat.indent-rainbow` rendered normally through the gateway). Blocks are logged against
+the CRX blob host — live rows: `Blocked · Chrome · clients2.googleusercontent.com ·
+/crx/blobs/… · "Google Docs Offline" · ghbmnnjooekpmoecnnnilnnbdlolhkhi · 1.108.1.0`,
+`Reason: Extension not allowed`.
+
+### 9.4 `approval_requests` is the only observable proxy for a block — and `action` is null
+
+The block page offers a "Request access" button
+(`/p/requestextension?cid=…&marketplace=chrome&friendly_name=…&item_id=…&user_id=unknown&requestedBy=unknown`).
+Submitting it emits an `approval_requests` row whose **`action` is null** — the lifecycle state
+lives only in `message`. Extraction is committed in the pack parsing rule; live coverage
+(90 d, 11 rows): decision 11/11, requester 11/11, decider 5/11, risk 6/11, zero empty strings,
+zero leakage into the other 20,410 audit rows. The `[risk: ...]` segment is **optional**.
+
+### 9.5 ⚠️ A blocked item is not in inventory — enrichment is structurally impossible
+
+An approval request exists because the item was blocked; blocked means never installed; never
+installed means absent from inventory. Live: `item_display_name=Snake` returns `total_count 0`
+on every marketplace while the control (`marketplace=chrome_web_store`) returns 65 items.
+`koi-inventory-list`'s `item_display_name` is a **case-insensitive SUBSTRING** filter
+(`Chatly` and `chatly` both match `Chatly - AI Assistant for Every Tab`). There is **no
+catalog/Koidex command** in the 13 Marketplace commands, so vendor risk for a never-installed
+item is unobtainable. The inventory lookup is therefore only useful **inverted**: present
+despite a block = grandfathered, group-scoped, or acquired outside gateway scope.
+
+### 9.6 What blocks automated testing of a block
+
+- The Chrome Web Store gallery **cannot be scripted or screenshotted** by any extension.
+- Raw `.crx`/`.vsix` download URLs are refused by the agent safety classifier.
+- A page `fetch()` does not reproduce a real install and never reached the gateway.
+
+So the block/approval leg must be driven **by a human, or by an agent-enrolled endpoint**.
+
+### 9.7 ⚠️ The requester email is self-asserted
+
+With PAC + CA but no KOI agent the gateway cannot attribute the user
+(`user_id=unknown&requestedBy=unknown`), so the end user types their own email. A live row reads
+`amahmoud@paltoaltonetworks.com` — a typo of `paloaltonetworks.com` no directory lookup would
+produce. `triggered_by` (structured, 100% populated) is the actor and is the safer field.
+**Never gate an approval on the requester field.**
+
+### 9.8 Coverage — the number to quote before anyone over-promises
+
+Installs over 90 days by marketplace: **outside** PAC scope `pypi 1788 · npm 437 ·
+software_windows 351 · software_mac 171 · built_in 146 · homebrew 96 · chocolatey 72 ·
+docker 15 · ollama 4 · claude_desktop_extensions 3 · npp 3 · side_loaded 2` ≈ **3,088**;
+**inside** PAC scope `chrome 87 · vsc 61 · github 26 · cursor 22 · edge 16 · firefox 13 · jet 5`
+≈ **230**. Roughly **nine in ten** installs with a known marketplace never traverse the gateway.
+Code packages are governed, if at all, by KOI's separate **registry** approach, not the PAC.

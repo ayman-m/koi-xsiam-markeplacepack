@@ -112,6 +112,92 @@ filter source_log_type = "Audit"
     // must never reach a command argument.
     to_string(null));
 
+// ── approval_requests — THE GATEWAY SIGNAL. Decision parsed out of `message`. ──
+// ADDED 23 July 2026, after live gateway testing on tenant `paet`.
+//
+// WHY THIS BLOCK EXISTS. The Supply Chain Gateway's per-request verdict log
+// (Allowed/Blocked, visible in the Koi console under Audit > Network Logs) is
+// CONSOLE-ONLY — it does NOT reach XSIAM. Verified 23 July 2026, 30-day window:
+// koi_koi_raw carries 17 distinct (type, action) pairs and NONE of them is a
+// gateway/block/network type, and `_raw_log contains "Blocked"` returns 0 rows.
+// So nothing downstream can trigger on a block directly.
+//
+// What DOES arrive is the user's reaction to the block: when the gateway blocks
+// an install it serves a block page with a "Request access" button
+// (paet.koi.security/p/requestextension?...), and submitting it emits an
+// `approval_requests` audit row. THAT is the observable proxy for a block, and
+// it is the reason this block is worth its length.
+//
+// 🚨 `action` IS NULL ON EVERY approval_requests ROW. Confirmed in the
+// type/action vocabulary sweep (30 d, 23 July 2026): `approval_requests` appears
+// with action = null, 10 rows. The lifecycle state — submitted / approved /
+// rejected — exists ONLY inside the free-text `message`. Without the extraction
+// below, the single most useful gateway signal in the dataset is unqueryable.
+//
+// Observed message grammar (live, 90 d, 23 July 2026):
+//   Approval request for "<item>" from <Marketplace> [risk: <level>] submitted by <email>
+//   Approval request for "<item>" from <Marketplace> [risk: <level>] by <email> was rejected by <email> (<reason>)
+//   Approval request for "<item>" from <Marketplace> by <email> was rejected by <email> (<reason>)
+//
+// ⚠️ THE `[risk: ...]` SEGMENT IS OPTIONAL — do not "fix" koi_approval_risk when
+// it reads null. Live: 6 of 10 rows carry it, 4 do not (both "Product Hunt" rows
+// and two "Snake" rows). Sparse is CORRECT here.
+//
+// ⚠️ DO NOT RE-ANCHOR koi_approval_requester ON "]". The first draft used
+// `\]\s+by\s+(\S+)\s+was` and returned NULL on exactly the rows with no
+// [risk:] segment (2 of 10). Anchoring on `was\s+(?:rejected|approved)` instead
+// resolves 10/10. This defect was found by running the expression against live
+// rows before committing it, not by review.
+//
+// Coverage — LIVE-VALIDATED 23 July 2026 by running these exact guarded
+// expressions against the tenant (90 d; 11 approval_requests rows). Both
+// conditions tested (`!= null` AND `!= ""`), per the audit convention below:
+//   column                  populated  empty ""   note
+//   ─────────────────────── ────────── ────────── ─────────────────────────────
+//   koi_approval_decision      11/11        0     submitted 6 · rejected 5
+//                                                 ("approved" unseen — the tenant
+//                                                  has approved 0 to date)
+//   koi_approval_requester     11/11        0     see the identity warning above
+//   koi_approval_decider        5/11        0     decided rows only; null on submit
+//   koi_approval_risk           6/11        0     [risk:] optional — sparse is CORRECT
+//
+// LEAK CHECK — the `type` guard verified against the WHOLE audit stream, same
+// run, 20,410 rows: all four columns are null on 100% of every other type —
+// extensions 17,110 · devices 2,972 · remediation 264 · policies 37 ·
+// guardrails 12 · notifications 4. Zero false positives.
+//
+// ⚠️ koi_approval_requester IS NOT AN AUTHENTICATED IDENTITY on endpoints that
+// have the PAC + CA but no Koi agent. The block page cannot attribute the user
+// (the request URL carries user_id=unknown&requestedBy=unknown), so the end user
+// TYPES their own email into the form. Live proof: a request in this very dataset
+// reads `amahmoud@paltoaltonetworks.com` — a typo of paloaltonetworks.com that a
+// directory lookup would never produce. TREAT IT AS A CLAIM, NOT AN IDENTITY: never
+// key an auto-approval or a trust decision on it. `triggered_by` (structured, present
+// on 100% of rows) is the ACTOR of the event and is the safer field.
+//
+// Structured fields that need NO parsing and should be preferred where they suffice:
+//   triggered_by  actor of this event (requester on submit, decider on decision)
+//   reason        the rejection/approval note, e.g. "Not approved."
+//   object_name   the item name          marketplace  the marketplace (short form)
+//   object_type   always "approval_request"
+//
+// Guarded on `type` so these columns stay null on every other audit row — the
+// keyword tests would otherwise be free to match unrelated messages.
+| alter
+    koi_approval_decision = if(type != "approval_requests", to_string(null),
+        message contains "was rejected by", "rejected",
+        message contains "was approved by", "approved",
+        message contains "submitted by",    "submitted",
+        to_string(null)),
+    koi_approval_risk = if(type != "approval_requests", to_string(null),
+        arrayindex(regextract(message, "\[risk:\s*([a-zA-Z]+)\]"), 0)),
+    koi_approval_requester = if(type != "approval_requests", to_string(null),
+        coalesce(
+            arrayindex(regextract(message, "submitted by\s+(\S+)"), 0),
+            arrayindex(regextract(message, "by\s+(\S+)\s+was\s+(?:rejected|approved)"), 0))),
+    koi_approval_decider = if(type != "approval_requests", to_string(null),
+        arrayindex(regextract(message, "was\s+(?:rejected|approved)\s+by\s+([^\s(]+)"), 0));
+
 filter source_log_type = "Alerts"
 | alter
     // finding_info — single JSON object, no cast needed. All 3 resolve on

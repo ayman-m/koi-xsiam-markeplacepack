@@ -1,0 +1,624 @@
+id: KOI Ext - Gateway Approval Triage
+version: -1
+fromversion: 6.10.0
+name: KOI Ext - Gateway Approval Triage
+description: |-
+  Triages a KOI Supply Chain Gateway APPROVAL REQUEST - the exception a user files after the
+  gateway blocked their install - and produces an evidence-backed recommendation for a human
+  reviewer. It never approves anything itself.
+
+  PACK: KOI Content Extension. Extends the Marketplace KOI pack v1.2.3 (13 commands,
+  integration only). Uses only commands that pack ships, plus the OPTIONAL
+  xdr-xql-generic-query (Cortex XDR - XQL Query Engine / Core) for decision history.
+
+  ============================================================================
+  WHY THIS PLAYBOOK EXISTS, AND WHY IT IS NOT AN "ENRICH THE ITEM" PLAYBOOK
+  ============================================================================
+  The gateway's own Allowed/Blocked verdict log is CONSOLE-ONLY and never reaches XSIAM
+  (verified 2026-07-23 on tenant paet: koi_koi_raw carries 17 distinct (type, action) pairs,
+  none of them a gateway/block/network type, and `_raw_log contains "Blocked"` returns 0 rows).
+  You cannot trigger on a block. What you CAN trigger on is the user's reaction to it: the
+  block page offers a "Request access" button, and pressing it emits an `approval_requests`
+  audit row. That row is this playbook's input.
+
+  🚨 THE BLOCKED ITEM IS NOT IN INVENTORY, AND THAT IS NOT A BUG.
+  The obvious design - "enrich the requested item" - DOES NOT WORK, and the reason is
+  structural rather than incidental. An approval request exists precisely BECAUSE the item was
+  blocked; blocked means never installed; never installed means it never entered the
+  organization's inventory. Live proof, 2026-07-23: `item_display_name=Snake` returns
+  total_count 0 on every marketplace, while the control query returns 65 chrome_web_store
+  items - the filter works, the item genuinely is not there.
+  CONSEQUENCE: koi-inventory-item-get and koi-inventory-item-endpoints-list are USELESS here
+  (both also require a version this event does not carry), and the pack's own
+  "KOI Ext - Enrich Item" sub-playbook is NOT reused, deliberately. There is also NO catalog /
+  Koidex lookup anywhere in the 13 Marketplace commands, so vendor risk for a
+  never-installed item is simply not obtainable from this pack. Do not add a task that
+  pretends otherwise.
+
+  SO THE INVENTORY LOOKUP IS INVERTED INTO A DETECTION. Task 1 still runs
+  koi-inventory-list, but the interesting answer is the UNEXPECTED one:
+    total_count = 0  -> NOT_INSTALLED          - the block held. Expected. Low signal.
+    total_count > 0  -> PRESENT_DESPITE_BLOCK  - the item is on endpoints anyway. HIGH signal:
+                        grandfathered from before the policy, allowed for another endpoint
+                        group, or acquired by a path the gateway does not cover (sideloaded,
+                        or a marketplace outside the PAC - see docs/xql/G6.xql, where ~9 in 10
+                        installs on this tenant are outside gateway scope).
+
+  MATCHING BY NAME IS THE ONLY OPTION, AND IT IS FUZZY.
+  approval_requests rows carry object_name + marketplace but NOT the marketplace item ID
+  (object_id is the REQUEST's own UUID). koi-inventory-list's item_display_name filter was
+  live-verified 2026-07-23 as a CASE-INSENSITIVE SUBSTRING match ("Chatly" and "chatly" both
+  return the one "Chatly - AI Assistant for Every Tab" record). That is what makes the lookup
+  possible at all, and also why a short or generic item name can over-match. The recommendation
+  text says so rather than hiding it.
+
+  MARKETPLACE VOCABULARY. Events use the SHORT form (chrome, vsc, software_windows); the API
+  wants the LONG form (chrome_web_store, vscode, windows). Pass the mapped value into
+  `marketplace`; keep the raw one in `marketplace_raw` for the record. The pack's parsing rule
+  publishes marketplace_api for exactly this. An empty marketplace is tolerated - it is an
+  optional FILTER on koi-inventory-list, not a required argument.
+
+  ⚠️ THE REQUESTER IS A CLAIM, NOT AN IDENTITY. On endpoints running the PAC + CA but no KOI
+  agent, the gateway cannot attribute the user - the request URL carries
+  user_id=unknown&requestedBy=unknown - so the end user TYPES their own email into the form.
+  A live row in this tenant reads `amahmoud@paltoaltonetworks.com`, a typo of the real domain
+  that no directory lookup would ever produce. NEVER gate an approval on this field.
+
+  NOTHING HERE MUTATES GOVERNANCE. koi-allowlist-items-add, koi-blocklist-items-add and
+  koi-policy-status-update are all deliberately absent. Granting the exception is a human act
+  performed in the KOI console (or via a separately-authorised playbook); this one gathers
+  evidence, writes it to the alert with setAlert, and stops at a manual gate.
+starttaskid: "0"
+tasks:
+  "0":
+    id: "0"
+    taskid: koiextgw-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: koiextgw-0000-4000-8000-000000000000
+      version: -1
+      name: ""
+      iscommand: false
+      brand: ""
+      type: start
+    nexttasks:
+      '#none#':
+      - "1"
+    separatecontext: false
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 50}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "1":
+    id: "1"
+    taskid: koiextgw-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000001
+      version: -1
+      name: Look up requested item in inventory
+      description: 'Searches the organization inventory for the REQUESTED item by display name. This is NOT enrichment - a blocked item is normally absent, because the block prevented the install. The lookup exists to catch the opposite case: the item present despite being blocked. item_display_name is a case-insensitive SUBSTRING filter (live-verified 2026-07-23), so a short name can over-match. marketplace is an optional filter and is passed only when known.'
+      iscommand: true
+      brand: ""
+      script: '|||koi-inventory-list'
+      type: regular
+    scriptarguments:
+      item_display_name:
+        simple: ${inputs.item_name}
+      marketplace:
+        simple: ${inputs.marketplace}
+      limit:
+        simple: "50"
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - "4"
+      '#none#':
+      - "2"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 200}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "2":
+    id: "2"
+    taskid: koiextgw-0000-4000-8000-000000000002
+    type: condition
+    task:
+      id: koiextgw-0000-4000-8000-000000000002
+      version: -1
+      name: Blocked item present in the estate anyway?
+      description: 'The inverted test. Empty is the EXPECTED outcome for a blocked item and means the block held. Non-empty is the finding: the item is installed somewhere despite being blocked - grandfathered, allowed for another endpoint group, or acquired outside gateway scope.'
+      iscommand: false
+      brand: ""
+      type: condition
+    conditions:
+    - label: "present"
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: Koi.Inventory.item_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - "4"
+      "present":
+      - "3"
+    separatecontext: false
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 360}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "3":
+    id: "3"
+    taskid: koiextgw-0000-4000-8000-000000000003
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000003
+      version: -1
+      name: Flag - present despite block
+      description: The high-signal branch. Records that the requested item already exists in inventory even though it is blocked, and captures what was matched so a reviewer can judge whether the name filter over-matched.
+      iscommand: false
+      brand: ""
+      script: Set
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiApproval.presence
+      value:
+        simple: PRESENT_DESPITE_BLOCK
+      append:
+        simple: "false"
+    nexttasks:
+      '#none#':
+      - "5"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: '{"position": {"x": 220, "y": 520}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "4":
+    id: "4"
+    taskid: koiextgw-0000-4000-8000-000000000004
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000004
+      version: -1
+      name: Record - not installed (block held)
+      description: The expected branch. The requested item is absent from inventory, which is what a working block looks like. Recorded explicitly so the reviewer sees an asserted negative rather than a missing value.
+      iscommand: false
+      brand: ""
+      script: Set
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiApproval.presence
+      value:
+        simple: NOT_INSTALLED
+      append:
+        simple: "false"
+    nexttasks:
+      '#none#':
+      - "5"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: '{"position": {"x": 680, "y": 520}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "5":
+    id: "5"
+    taskid: koiextgw-0000-4000-8000-000000000005
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000005
+      version: -1
+      name: Clear previous XQL results
+      description: xdr-xql-generic-query APPENDS to PaloAltoNetworksXQL.GenericQuery. Deleting it first guarantees the decision-history read below sees only its own result.
+      iscommand: false
+      brand: ""
+      script: DeleteContext
+      type: regular
+    scriptarguments:
+      key:
+        simple: PaloAltoNetworksXQL.GenericQuery
+    nexttasks:
+      '#none#':
+      - "6"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 680}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "6":
+    id: "6"
+    taskid: koiextgw-0000-4000-8000-000000000006
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000006
+      version: -1
+      name: Decision history for this item (XQL)
+      description: 'THE STRONGEST DECISION INPUT. Rebuilds every prior approval request for this item name: how many times, by how many distinct people, and whether a reviewer already rejected it. Mirrors docs/xql/G1.xql and G2.xql. Extraction is INLINE because the parsing rule''s koi_approval_* columns apply at ingest only and are null on historical rows. OPTIONAL dependency - xdr-xql-generic-query is the Cortex XDR - XQL Query Engine (Core on the Cortex platform), NOT a KOI command; the whole task is continue-on-error and the playbook completes without it.'
+      iscommand: true
+      brand: ""
+      script: '|||xdr-xql-generic-query'
+      type: regular
+    scriptarguments:
+      query:
+        simple: |-
+          dataset = koi_koi_raw
+          | filter type = "approval_requests" and object_name = "${inputs.item_name}"
+          | alter decision = if(message contains "was rejected by", "rejected",
+                                message contains "was approved by", "approved",
+                                message contains "submitted by",    "submitted", to_string(null)),
+                  requester = coalesce(
+                      arrayindex(regextract(message, "submitted by\s+(\S+)"), 0),
+                      arrayindex(regextract(message, "by\s+(\S+)\s+was\s+(?:rejected|approved)"), 0))
+          | comp count() as requests,
+                 count_distinct(requester) as distinct_requesters,
+                 sum(if(decision = "rejected", 1, 0)) as prior_rejections,
+                 sum(if(decision = "approved", 1, 0)) as prior_approvals,
+                 min(_time) as first_request, max(_time) as last_request
+            by object_name, marketplace
+      time_frame:
+        simple: ${inputs.lookback_days} days
+      using:
+        simple: ${inputs.xql_instance}
+    nexttasks:
+      '#error#':
+      - "7"
+      '#none#':
+      - "7"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 840}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "7":
+    id: "7"
+    taskid: koiextgw-0000-4000-8000-000000000007
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000007
+      version: -1
+      name: Read governance context - policies
+      description: Lists the configured policies so the reviewer can see WHICH rule blocked the item. The gateway does not tell XSIAM why it blocked, so this is reconstructed from policy configuration rather than read from the block event.
+      iscommand: true
+      brand: ""
+      script: '|||koi-policy-list'
+      type: regular
+    scriptarguments:
+      limit:
+        simple: "200"
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - "8"
+      '#none#':
+      - "8"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1000}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "8":
+    id: "8"
+    taskid: koiextgw-0000-4000-8000-000000000008
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000008
+      version: -1
+      name: Read global blocklist
+      description: 'Global lists take precedence over custom policies, so an entry here is the strongest possible reason for the block. Note on tenant paet, 2026-07-23, the global blocklist was EMPTY - an empty result is normal and is not an error.'
+      iscommand: true
+      brand: ""
+      script: '|||koi-blocklist-get'
+      type: regular
+    scriptarguments:
+      limit:
+        simple: "200"
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - "9"
+      '#none#':
+      - "9"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1160}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "9":
+    id: "9"
+    taskid: koiextgw-0000-4000-8000-000000000009
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000009
+      version: -1
+      name: Read allowlist
+      description: Shows whether this item is already allowed somewhere - which would make the request redundant, or reveal that the block is scoped to one endpoint group while another group already has an exception.
+      iscommand: true
+      brand: ""
+      script: '|||koi-allowlist-get'
+      type: regular
+    scriptarguments:
+      limit:
+        simple: "200"
+      using:
+        simple: ${inputs.instance_name}
+    nexttasks:
+      '#error#':
+      - "10"
+      '#none#':
+      - "10"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: '{"position": {"x": 450, "y": 1320}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "10":
+    id: "10"
+    taskid: koiextgw-0000-4000-8000-000000000010
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000010
+      version: -1
+      name: Build reviewer summary
+      description: 'Assembles the evidence into one markdown block for the reviewer. Deliberately states what is NOT known as well as what is: there is no catalog risk for a never-installed item anywhere in the 13 Marketplace commands, and the requester email is self-asserted on non-agent endpoints.'
+      iscommand: false
+      brand: ""
+      script: Set
+      type: regular
+    scriptarguments:
+      key:
+        simple: KoiApproval.summary
+      value:
+        simple: |-
+          ### KOI Gateway approval request — ${inputs.item_name}
+
+          | Field | Value |
+          |---|---|
+          | Item | ${inputs.item_name} |
+          | Marketplace | ${inputs.marketplace} (raw: ${inputs.marketplace_raw}) |
+          | Requested by (SELF-ASSERTED) | ${inputs.requester} |
+          | Current decision state | ${inputs.decision} |
+          | Risk stated in event | ${inputs.risk} |
+          | Estate presence | ${KoiApproval.presence} |
+          | Matched inventory item_ids | ${Koi.Inventory.item_id} |
+          | Prior requests | ${PaloAltoNetworksXQL.GenericQuery.results.requests} |
+          | Distinct requesters | ${PaloAltoNetworksXQL.GenericQuery.results.distinct_requesters} |
+          | Prior rejections | ${PaloAltoNetworksXQL.GenericQuery.results.prior_rejections} |
+          | Prior approvals | ${PaloAltoNetworksXQL.GenericQuery.results.prior_approvals} |
+
+          **What this evidence cannot tell you**
+          - No vendor/catalog risk is available: the Marketplace pack has no Koidex/catalog
+            command, and the item is not in inventory because the block prevented the install.
+          - The gateway's own block record never reaches XSIAM, so the blocking policy is
+            inferred from policy/blocklist configuration, not read from the block event.
+          - The requester email is typed by the end user on endpoints without the KOI agent.
+          - Item matching is a case-insensitive SUBSTRING on the display name; a short or
+            generic name can over-match.
+      append:
+        simple: "false"
+    nexttasks:
+      '#none#':
+      - "11"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 1480}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "11":
+    id: "11"
+    taskid: koiextgw-0000-4000-8000-000000000011
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000011
+      version: -1
+      name: Write findings to the alert
+      description: 'Populates the KOI alert fields directly with setAlert - no classifier and no mapper, matching the rest of this pack. koiverdict carries the estate-presence result because that is the only machine-decidable finding available for a blocked item.'
+      iscommand: true
+      brand: ""
+      script: '|||setAlert'
+      type: regular
+    scriptarguments:
+      koiitemname:
+        simple: ${inputs.item_name}
+      koimarketplace:
+        simple: ${inputs.marketplace}
+      koimarketplaceraw:
+        simple: ${inputs.marketplace_raw}
+      koirisklevel:
+        simple: ${inputs.risk}
+      koideviceuser:
+        simple: ${inputs.requester}
+      koiverdict:
+        simple: ${KoiApproval.presence}
+      koiinvestigationsummary:
+        simple: ${KoiApproval.summary}
+    nexttasks:
+      '#none#':
+      - "12"
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 1640}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "12":
+    id: "12"
+    taskid: koiextgw-0000-4000-8000-000000000012
+    type: regular
+    task:
+      id: koiextgw-0000-4000-8000-000000000012
+      version: -1
+      name: Reviewer decision (manual)
+      description: 'THE STOPPING POINT, BY DESIGN. Granting a gateway exception changes the organization''s governance posture, so it is a human act. This playbook never calls koi-allowlist-items-add, koi-blocklist-items-remove or koi-policy-status-update. The reviewer acts in the KOI console (Operations > Requests) or through a separately-authorised playbook.'
+      iscommand: false
+      brand: ""
+      type: regular
+    nexttasks:
+      '#none#':
+      - "13"
+    separatecontext: false
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 1800}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  "13":
+    id: "13"
+    taskid: koiextgw-0000-4000-8000-000000000013
+    type: title
+    task:
+      id: koiextgw-0000-4000-8000-000000000013
+      version: -1
+      name: Done
+      type: title
+      iscommand: false
+      brand: ""
+      description: ''
+    separatecontext: false
+    continueonerrortype: ""
+    view: '{"position": {"x": 450, "y": 1960}}'
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+inputs:
+- key: item_name
+  value: {}
+  required: true
+  description: 'Display name of the requested item, from the approval_requests audit row (object_name). Matched as a case-insensitive SUBSTRING against inventory.'
+  playbookInputQuery: null
+- key: marketplace
+  value: {}
+  required: false
+  description: 'Marketplace in the API LONG vocabulary (chrome_web_store, vscode, windows). Optional filter on the inventory lookup. Use the parsing rule''s marketplace_api, never the raw event value.'
+  playbookInputQuery: null
+- key: marketplace_raw
+  value: {}
+  required: false
+  description: 'Marketplace exactly as the event stated it, in the SHORT vocabulary (chrome, vsc, software_windows). Recorded for the audit trail; never passed to a command.'
+  playbookInputQuery: null
+- key: requester
+  value: {}
+  required: false
+  description: 'Email of the requester. SELF-ASSERTED and unverified on endpoints without the KOI agent - never gate a decision on it.'
+  playbookInputQuery: null
+- key: decision
+  value: {}
+  required: false
+  description: 'Current lifecycle state parsed from the event message: submitted, rejected or approved.'
+  playbookInputQuery: null
+- key: risk
+  value: {}
+  required: false
+  description: 'Risk level as stated in the event message. Frequently ABSENT - the [risk: ..] segment is optional (6 of 11 rows carried it on 2026-07-23).'
+  playbookInputQuery: null
+- key: instance_name
+  value: {}
+  required: false
+  description: Name of the KOI integration instance to run the KOI commands against.
+  playbookInputQuery: null
+- key: xql_instance
+  value: {}
+  required: false
+  description: Name of the Cortex XDR - XQL Query Engine (or Core) instance for the decision-history query. Leave empty to use the default instance.
+  playbookInputQuery: null
+- key: lookback_days
+  value:
+    simple: "90"
+  required: false
+  description: Lookback window for the decision-history query.
+  playbookInputQuery: null
+outputs:
+- contextPath: KoiApproval.presence
+  description: 'NOT_INSTALLED (block held) or the matched inventory item_ids (PRESENT_DESPITE_BLOCK).'
+  type: string
+- contextPath: KoiApproval.summary
+  description: Markdown evidence summary written to the alert.
+  type: string
+tests:
+- No tests (auto formatted)

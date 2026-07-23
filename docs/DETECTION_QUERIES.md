@@ -2027,9 +2027,115 @@ _False positives:_ days_since_change measures time since the last KOI-observed c
 
 ---
 
+## Theme G — Supply Chain Gateway
+
+_The gateway is the KOI proxy that intercepts marketplace traffic and allows, blocks or gates installs. Validated end-to-end on tenant `paet` on 2026-07-23 by a real Chrome install attempt: block → "Request access" → approval form → rejection → XSIAM event._
+
+_6 queries._
+
+> **⚠️ READ THIS BEFORE WRITING ANY GATEWAY DETECTION.** The gateway's own per-request verdict log — `Allowed` / `Blocked`, with domain, path, item ID, version, reason, group and identity — is visible in the KOI console under **Audit → Network Logs** and is **console-only. It never reaches XSIAM.** Verified 2026-07-23: `koi_koi_raw` carries 17 distinct `(type, action)` pairs and none is a gateway/block/network type; `_raw_log contains "Blocked"` returns **0 rows**. **You cannot alert on a block.** Theme G therefore detects the *consequences* of blocks — approval requests, remediations, and provenance gaps.
+>
+> **Enforcement is at package download, not browsing.** Blocks are logged against the CRX blob host (`clients2.googleusercontent.com/crx/blobs/…`); browsing an item's store page passes through untouched.
+>
+> **Inline extraction is deliberate.** `approval_requests` rows have `action = null` — the lifecycle state lives only in the free-text `message`. The pack's parsing rule promotes `koi_approval_*`, but parsing rules apply **at ingest only**, so those columns are null on historical rows. Every query here re-derives them inline so it works over all history.
+
+### G1 — Approval pressure: one blocked item, many requesters
+
+**Purpose:** detection · **Status:** validated (2 rows on this tenant) · **Datasets:** koi_koi_raw (Audit)
+
+Which blocked item is generating repeated exception requests, and from how many distinct people? Repeated requests are the observable shadow of repeated blocks.
+
+_Parameters:_ tune `distinct_requesters` upward for a stricter signal.
+
+```sql
+-- body in docs/xql/G1.xql
+```
+
+_Interpretation:_ **Snake/chrome — 8 requests from 5 distinct requesters** (2026-06-22 → 2026-07-23); Product Hunt/chrome — 2 requests, 1 requester. One person retrying is noise; five people converging on one blocked item is a genuine business need or a social-engineering target, and deserves a human decision.
+
+_False positives:_ Low as a signal, but it measures *demand*, not *risk* — a popular benign tool will rank top. Always pair with the item's risk/findings before acting.
+
+### G2 — Re-request after rejection
+
+**Purpose:** detection · **Status:** validated (1 row on this tenant) · **Datasets:** koi_koi_raw (Audit)
+
+Items a reviewer **rejected** that were then requested again — persistence against a denial.
+
+```sql
+-- body in docs/xql/G2.xql
+```
+
+_Interpretation:_ Snake/chrome — 4 rejections, 4 submissions. Either an unmet business need that needs a real exception process, or someone probing for a reviewer who will say yes.
+
+_False positives:_ Name-based (see limitation below), and it proves both events happened for the item — **not** that the re-request came after the rejection. Use G5 for time-ordered evidence.
+
+### G3 — Installs with no marketplace provenance (gateway-invisible)
+
+**Purpose:** detection / coverage · **Status:** validated (3 rows on this tenant) · **Datasets:** koi_koi_raw (Audit)
+
+Items installed without any marketplace attribution — the gateway could never have inspected them.
+
+```sql
+-- body in docs/xql/G3.xql
+```
+
+_Interpretation:_ `null` 286 installs / 69 items · `built_in` 146 / 14 · **`side_loaded` 2 / 2**. Read `built_in` as expected, `side_loaded` as the one to chase (it is the classic bypass — and G4 shows `system_sideloading_protection` firing on one), and `null` as a data-quality question for KOI rather than an attack signal.
+
+_False positives:_ `built_in` is almost entirely benign platform-shipped software. `side_loaded` and `built_in` are **installation methods** leaking into the marketplace column — the parsing rule maps both to NULL for `marketplace_api`, since no KOI API command accepts them.
+
+### G4 — System guardrail remediation fired (not a custom policy)
+
+**Purpose:** detection · **Status:** validated (11 rows on this tenant) · **Datasets:** koi_koi_raw (Audit)
+
+Where did KOI's own built-in protections act, as opposed to a customer-authored policy?
+
+```sql
+-- body in docs/xql/G4.xql
+```
+
+_Interpretation:_ `reason` is **overloaded** — it holds either a snake_case system-guardrail id or the free-text *name* of a custom policy. System: `system_malware_protection` 17, `system_auto_remediated_delisted` 4, `system_mcp_registry_protection` 2, `mcp_registry_protection` 2 (note: **no** `system_` prefix — a KOI inconsistency), `system_sideloading_protection` 1. Custom, for contrast: "NPM Block CS" 89, "Block List Pre Blocked" 49, "Block AI-powered items" 27. The most actionable shape is a backlog of `remediation_pending` on `system_malware_protection` — malware KOI flagged but has **not yet removed**.
+
+_False positives:_ Low. `platform ≠ marketplace` (live pairs include marketplace=chrome/platform=talon, marketplace=homebrew/platform=vsc) — group by both or you will misattribute.
+
+### G5 — Rejected, then installed anyway (bypass after denial)
+
+**Purpose:** detection (high severity) · **Status:** validated — **0 rows (clean)** · **Datasets:** koi_koi_raw (Audit)
+
+Did an item a reviewer rejected later appear as installed, with the install **later in time** than the rejection?
+
+```sql
+-- body in docs/xql/G5.xql
+```
+
+_Interpretation:_ **Zero rows is the passing result** — on tenant `paet`, over 90 days, no rejected item was subsequently installed. The block held. Ship it anyway: it is cheap, and the day it fires you have someone who was told no and got the software onto an endpoint regardless. Uses a **single-pass tag-and-reduce** instead of a join (a two-shape join in one dataset times out the validation window).
+
+_False positives:_ `max(install) > min(rejection)` means "an install exists after the first rejection" — an item installed before and reinstalled after also matches, which is arguably still worth seeing.
+
+### G6 — Gateway coverage gap: installs outside PAC scope
+
+**Purpose:** coverage / posture reporting (**not** an alert) · **Status:** validated (12 rows on this tenant) · **Datasets:** koi_koi_raw (Audit)
+
+How much of what actually gets installed never traverses the gateway at all?
+
+```sql
+-- body in docs/xql/G6.xql
+```
+
+_Interpretation:_ **This is the most important number in Theme G.** The gateway is a proxy — it governs only hosts the PAC routes to it (browser stores, IDE marketplaces, Hugging Face, GitHub MCP). It does **not** route PyPI, npm, Homebrew, Chocolatey, Docker, OS software channels or anything sideloaded; those are governed, if at all, by KOI's separate **registry** approach (pip/npm config), not the PAC. Live: `pypi 1788/539 · npm 437/246 · software_windows 351/127 · software_mac 171/97 · built_in 146/14 · homebrew 96/54 · chocolatey 72/24 · docker 15/7 · ollama 4 · claude_desktop_extensions 3 · npp 3 · side_loaded 2` ≈ **3,088 installs outside PAC scope**, versus ≈**230** on PAC-covered marketplaces (chrome 87, vsc 61, github 26, cursor 22, edge 16, firefox 13, jet 5). **Roughly nine in ten installs with a known marketplace are outside gateway scope.** Use this to set expectations before anyone concludes "the gateway will stop supply-chain installs" — it stops the ones routed through it, which here is the browser/IDE extension surface, not the code-package surface.
+
+_False positives:_ n/a — this is a scoping measurement, not an incident. The marketplace list is the **short event vocabulary** (`vsc`, not `vscode`); keep it in sync with the PAC file if KOI adds marketplaces.
+
+### Theme G limitations that apply to G1, G2 and G5
+
+**Approval rows carry no marketplace item ID.** `object_name` and `marketplace` are present, but `object_id` is the **approval request's own UUID**, not the extension's. Correlating an approval to an install is therefore **name-based**, and two different items sharing a display name would merge. Verified on this tenant: all approval rows are `chrome` and the three names (Snake, Product Hunt, SAML-tracer) are distinct, so the merge risk is not currently realised.
+
+**The requester email is unverified.** On endpoints with the PAC + CA but **no KOI agent**, the block page cannot attribute the user — the request URL carries `user_id=unknown&requestedBy=unknown` — so the end user **types their own email**. A live row in this dataset reads `amahmoud@paltoaltonetworks.com`, a typo of the real domain that no directory lookup would produce. **Treat the requester as a claim, not an identity**; never key an auto-approval on it. `triggered_by` (structured, 100% populated) is the actor of the event and is the safer field.
+
+---
+
 ## Summary
 
-45 queries across 4 themes — 41 validated against live data, 4 parse-confirmed heavy joins (B10, B3, B8, B9). Per theme: A=8, B=12, C=13, D=12.
+51 queries across 5 themes — 47 validated against live data, 4 parse-confirmed heavy joins (B10, B3, B8, B9). Per theme: A=8, B=12, C=13, D=12, G=6.
 
 
-Query bodies are in `docs/xql/<id>.xql`. Highest value: **B8** (KOI-scored risk observed executing), **B9** (shadow MCP — running but never inventoried), **C4** (KOI last-scan-age per host), **A5/A6** (bidirectional coverage gaps).
+Query bodies are in `docs/xql/<id>.xql`. Highest value: **B8** (KOI-scored risk observed executing), **B9** (shadow MCP — running but never inventoried), **C4** (KOI last-scan-age per host), **A5/A6** (bidirectional coverage gaps), **G6** (how little of the estate the gateway actually covers), **G1** (approval pressure on a blocked item).
