@@ -289,7 +289,7 @@ tasks:
       id: c0ffee02-0000-4000-8000-000000000024
       version: -1
       name: Was the entry skipped (no matching endpoints)?
-      description: A skipped entry is not an error — it means no connected endpoints currently match the target filters. No notification is sent.
+      description: A skipped entry is not an error — it means no endpoints are currently due and connected for scan (all within the rescan interval, none connected, or the tracker not yet populated). No notification is sent.
       iscommand: false
       brand: ""
       type: condition
@@ -339,7 +339,7 @@ tasks:
       type: regular
     scriptarguments:
       value:
-        simple: 'Koi Script Runner: SKIPPED "${inputs.config_entry.script.name}" — no connected ${inputs.config_entry.target.endpoint_os} endpoints currently match the target scope (groups: ${inputs.config_entry.target.endpoint_groups}, hostnames: ${inputs.config_entry.target.endpoint_hostnames}). Nothing to do this run.'
+        simple: 'Koi Script Runner: SKIPPED "${inputs.config_entry.script.name}" — no ${inputs.config_entry.target.endpoint_os} endpoints are currently due and connected for scan (tracker: ${inputs.config_entry.target.tracker_list}). This is normal: all tracked endpoints were scanned within the last ${inputs.config_entry.target.rescan_interval_hours}h, or none are connected right now, or the tracker is empty (run the Refresh job first). Nothing to do this run.'
     nexttasks:
       '#none#':
       - "10"
