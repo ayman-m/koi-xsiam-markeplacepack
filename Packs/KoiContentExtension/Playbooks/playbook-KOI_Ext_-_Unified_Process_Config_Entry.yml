@@ -255,6 +255,8 @@ tasks:
         simple: ${inputs.config_entry.target.tracker_list}
       rescan_interval_hours:
         simple: ${inputs.config_entry.target.rescan_interval_hours}
+      endpoint_os:
+        simple: ${inputs.config_entry.target.endpoint_os}
     loop:
       iscommand: false
       exitCondition: ""
