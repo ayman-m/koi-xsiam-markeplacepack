@@ -1,18 +1,9 @@
-id: KOI Ext - Unified Script Runner
+id: KOI Ext - Unified Refresh Tracker
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Unified Script Runner
+name: KOI Ext - Unified Refresh Tracker
 description: |-
-  Main job playbook: reads the "Koi Script Runner" configuration List (a JSON
-  array of entries), then runs "KOI Ext - Unified Process Config Entry" for every
-  entry. Designed to be attached to a time-triggered Job.
-
-  Each list entry defines: script.name (or script.uuid), target.endpoint_os,
-  target.endpoint_groups / target.endpoint_hostnames, and optional disabled,
-  script.polling_interval_in_seconds, script.timeout_in_seconds and
-  notification (recipients + sendmail_instance.name) settings.
-
-  Unified from the NE, Cortex per-OS, and MMAA runner playbooks.
+  Refresh job for the scan-coverage tracker. Reads the "Koi Script Runner" List and, for every entry, enumerates its endpoint group/OS and upserts membership into the entry's tracker List. Attach to a time-triggered Job that runs less often than the scan job (e.g. hourly).
 starttaskid: "0"
 tasks:
   "0":
@@ -141,9 +132,9 @@ tasks:
     task:
       id: c0ffee01-0000-4000-8000-000000000003
       version: -1
-      name: Process each configuration entry
-      description: Runs the Koi script for every configuration entry (invalid entries are reported by the sub-playbook).
-      playbookId: KOI Ext - Unified Process Config Entry
+      name: Refresh the tracker for every entry
+      description: Enumerates each configuration entry's group/OS into its tracker List.
+      playbookId: KOI Ext - Unified Refresh Entry
       iscommand: false
       brand: ""
       type: playbook

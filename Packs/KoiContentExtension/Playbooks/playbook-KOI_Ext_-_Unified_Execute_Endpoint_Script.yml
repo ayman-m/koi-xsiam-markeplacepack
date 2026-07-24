@@ -3,33 +3,19 @@ version: -1
 fromversion: 6.10.0
 name: KOI Ext - Unified Execute Endpoint Script
 description: |-
-  Part of the KOI Content Extension pack, which extends the Marketplace KOI
-  pack v1.2.3 (integration id "KOI") - that pack must be installed on the
-  tenant.
-  KOI commands used by this playbook: none. It is not command-free, though -
-  the only integration commands it issues are the Cortex-native
-  core-get-scripts, core-get-endpoints and core-script-run, which come from the
-  Core REST API / Cortex XDR-XSIAM integration and are independent of KOI.
-
-  Executes a script from the Action Center script library on targeted
-  endpoints. Resolves the script UUID from its name (unless a UUID is
-  supplied), targets connected, unisolated endpoints filtered by OS / endpoint
-  groups / hostnames, and returns a structured ScriptResult (ok / reason /
-  skipped / action_id).
-
-  Prerequisites: the script must exist in Action Center > Scripts Library with
-  a name matching script.name exactly (or script.uuid pinned), referenced
-  endpoint groups must exist, and target agents must be installed, connected
-  and unisolated. If nothing matches, ScriptResult.skipped is true - a normal
-  outcome, not an error.
+  Executes a script from the Action Center script library on targeted endpoints.
+  Resolves the script UUID from its name (unless a UUID is supplied), targets
+  connected, unisolated endpoints filtered by OS / endpoint groups / hostnames,
+  and returns a structured ScriptResult (ok / reason / action_id).
+  Unified from the NE, Cortex per-OS, and MMAA runner playbooks.
 starttaskid: "0"
 tasks:
   "0":
     id: "0"
-    taskid: 9a1b0003-0000-4000-8000-000000000000
+    taskid: c0ffee03-0000-4000-8000-000000000000
     type: start
     task:
-      id: 9a1b0003-0000-4000-8000-000000000000
+      id: c0ffee03-0000-4000-8000-000000000000
       version: -1
       name: ""
       iscommand: false
@@ -56,10 +42,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "18":
     id: "18"
-    taskid: 9a1b0003-0000-4000-8000-000000000018
+    taskid: c0ffee03-0000-4000-8000-000000000018
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000018
+      id: c0ffee03-0000-4000-8000-000000000018
       version: -1
       name: Reset iteration context
       description: Clears leftover context from the previous loop iteration (loop iterations share the sub-playbook context).
@@ -94,10 +80,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "1":
     id: "1"
-    taskid: 9a1b0003-0000-4000-8000-000000000001
+    taskid: c0ffee03-0000-4000-8000-000000000001
     type: condition
     task:
-      id: 9a1b0003-0000-4000-8000-000000000001
+      id: c0ffee03-0000-4000-8000-000000000001
       version: -1
       name: Script UUID provided?
       description: Skip library lookup when the caller already supplied a script UUID.
@@ -137,10 +123,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "2":
     id: "2"
-    taskid: 9a1b0003-0000-4000-8000-000000000002
+    taskid: c0ffee03-0000-4000-8000-000000000002
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000002
+      id: c0ffee03-0000-4000-8000-000000000002
       version: -1
       name: Use provided script UUID
       description: Set a value in context under the key you entered.
@@ -177,10 +163,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "3":
     id: "3"
-    taskid: 9a1b0003-0000-4000-8000-000000000003
+    taskid: c0ffee03-0000-4000-8000-000000000003
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000003
+      id: c0ffee03-0000-4000-8000-000000000003
       version: -1
       name: Get list of scripts
       description: Gets a list of scripts available in the scripts library.
@@ -215,10 +201,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "4":
     id: "4"
-    taskid: 9a1b0003-0000-4000-8000-000000000004
+    taskid: c0ffee03-0000-4000-8000-000000000004
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000004
+      id: c0ffee03-0000-4000-8000-000000000004
       version: -1
       name: Find script UUID by name
       description: Resolve the script name to its UUID from the script library results.
@@ -256,10 +242,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "5":
     id: "5"
-    taskid: 9a1b0003-0000-4000-8000-000000000005
+    taskid: c0ffee03-0000-4000-8000-000000000005
     type: condition
     task:
-      id: 9a1b0003-0000-4000-8000-000000000005
+      id: c0ffee03-0000-4000-8000-000000000005
       version: -1
       name: How many scripts matched?
       description: Fail clearly when the script name resolves to zero or multiple UUIDs.
@@ -314,38 +300,48 @@ tasks:
     isautoswitchedtoquietmode: false
   "6":
     id: "6"
-    taskid: 9a1b0003-0000-4000-8000-000000000006
+    taskid: c0ffee03-0000-4000-8000-000000000006
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000006
+      id: c0ffee03-0000-4000-8000-000000000006
       version: -1
-      name: Get target endpoints
-      description: Gets a list of endpoints, according to the passed filters.
+      name: Select due endpoints
+      description: Ask KoiScanTracker for up to max due, currently-connected endpoints from the tracker.
       iscommand: true
       brand: ""
-      script: '|||core-get-endpoints'
+      script: 'KoiScanTracker'
       type: regular
+      scriptName: KoiScanTracker
     scriptarguments:
-      platform:
+      action:
+        simple: select
+      tracker_list:
+        simple: ${inputs.tracker_list}
+      rescan_interval_hours:
         complex:
-          root: inputs.endpoint_os
+          root: inputs.rescan_interval_hours
           transformers:
-          - operator: toLowerCase
-      group_name:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: '720'
+      max:
         complex:
-          root: inputs.endpoint_groups
-      hostname:
-        complex:
-          root: inputs.endpoint_hostnames
-      status:
-        simple: connected
-      isolate:
-        simple: unisolated
+          root: inputs.max_endpoints
+          transformers:
+          - operator: SetIfEmpty
+            args:
+              applyIfEmpty: {}
+              defaultValue:
+                value:
+                  simple: '100'
     nexttasks:
       '#error#':
-      - "15"
+      - '15'
       '#none#':
-      - "7"
+      - '7'
     separatecontext: false
     continueonerror: true
     continueonerrortype: errorPath
@@ -365,13 +361,13 @@ tasks:
     isautoswitchedtoquietmode: false
   "7":
     id: "7"
-    taskid: 9a1b0003-0000-4000-8000-000000000007
+    taskid: c0ffee03-0000-4000-8000-000000000007
     type: condition
     task:
-      id: 9a1b0003-0000-4000-8000-000000000007
+      id: c0ffee03-0000-4000-8000-000000000007
       version: -1
-      name: Connected endpoints found?
-      description: Only connected (online) endpoints are eligible for script execution.
+      name: Any due endpoints?
+      description: Proceed only when at least one due, connected endpoint was returned.
       iscommand: false
       brand: ""
       type: condition
@@ -381,26 +377,16 @@ tasks:
       - - left:
             iscontext: true
             value:
-              complex:
-                root: Core.Endpoint
-                filters:
-                - - left:
-                      iscontext: true
-                      value:
-                        simple: Core.Endpoint.endpoint_status
-                    operator: isEqualString
-                    right:
-                      value:
-                        simple: CONNECTED
-                accessor: endpoint_id
-          operator: isNotEmpty
+              simple: KoiScanTracker.Select.connected_count
+          operator: greaterThan
           right:
-            value: {}
+            value:
+              simple: '0'
     nexttasks:
       '#default#':
-      - "16"
+      - '16'
       "yes":
-      - "8"
+      - '8'
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -419,10 +405,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "8":
     id: "8"
-    taskid: 9a1b0003-0000-4000-8000-000000000008
+    taskid: c0ffee03-0000-4000-8000-000000000008
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000008
+      id: c0ffee03-0000-4000-8000-000000000008
       version: -1
       name: Run script on endpoints
       description: Initiates a new endpoint script execution and polls for its completion.
@@ -433,19 +419,8 @@ tasks:
     scriptarguments:
       endpoint_ids:
         complex:
-          root: Core.Endpoint
-          filters:
-          - - left:
-                iscontext: true
-                value:
-                  simple: Core.Endpoint.endpoint_status
-              operator: isEqualString
-              right:
-                value:
-                  simple: CONNECTED
-          accessor: endpoint_id
+          root: KoiScanTracker.Select.due_connected
           transformers:
-          - operator: uniq
           - operator: join
             args:
               separator:
@@ -476,9 +451,9 @@ tasks:
                   simple: "1800"
     nexttasks:
       '#error#':
-      - "9"
+      - '9'
       '#none#':
-      - "10"
+      - '10'
     separatecontext: false
     continueonerror: true
     continueonerrortype: errorPath
@@ -498,10 +473,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "9":
     id: "9"
-    taskid: 9a1b0003-0000-4000-8000-000000000009
+    taskid: c0ffee03-0000-4000-8000-000000000009
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000009
+      id: c0ffee03-0000-4000-8000-000000000009
       version: -1
       name: Get script execution errors
       description: Get the error(s) associated with the failed script execution task.
@@ -515,7 +490,7 @@ tasks:
           root: lastCompletedTaskEntries
     nexttasks:
       '#none#':
-      - "17"
+      - '21'
     separatecontext: false
     continueonerror: true
     continueonerrortype: ""
@@ -535,10 +510,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "10":
     id: "10"
-    taskid: 9a1b0003-0000-4000-8000-00000000000a
+    taskid: c0ffee03-0000-4000-8000-00000000000a
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000a
+      id: c0ffee03-0000-4000-8000-00000000000a
       version: -1
       name: Set ScriptResult - Success
       description: Set a value in context under the key you entered.
@@ -574,7 +549,7 @@ tasks:
         simple: "false"
     nexttasks:
       '#none#':
-      - "19"
+      - '24'
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -593,10 +568,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "19":
     id: "19"
-    taskid: 9a1b0003-0000-4000-8000-000000000019
+    taskid: c0ffee03-0000-4000-8000-000000000019
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000019
+      id: c0ffee03-0000-4000-8000-000000000019
       version: -1
       name: Record action ID
       description: Stores the Action Center action ID of the successful script run.
@@ -613,7 +588,7 @@ tasks:
         simple: "false"
     nexttasks:
       '#none#':
-      - "11"
+      - '23'
     separatecontext: false
     continueonerror: true
     continueonerrortype: ""
@@ -633,10 +608,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "11":
     id: "11"
-    taskid: 9a1b0003-0000-4000-8000-00000000000b
+    taskid: c0ffee03-0000-4000-8000-00000000000b
     type: title
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000b
+      id: c0ffee03-0000-4000-8000-00000000000b
       version: -1
       name: Done
       iscommand: false
@@ -660,10 +635,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "12":
     id: "12"
-    taskid: 9a1b0003-0000-4000-8000-00000000000c
+    taskid: c0ffee03-0000-4000-8000-00000000000c
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000c
+      id: c0ffee03-0000-4000-8000-00000000000c
       version: -1
       name: Set ScriptResult - Library query failed
       description: Set a value in context under the key you entered.
@@ -718,10 +693,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "13":
     id: "13"
-    taskid: 9a1b0003-0000-4000-8000-00000000000d
+    taskid: c0ffee03-0000-4000-8000-00000000000d
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000d
+      id: c0ffee03-0000-4000-8000-00000000000d
       version: -1
       name: Set ScriptResult - Script not found
       description: Set a value in context under the key you entered.
@@ -776,10 +751,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "14":
     id: "14"
-    taskid: 9a1b0003-0000-4000-8000-00000000000e
+    taskid: c0ffee03-0000-4000-8000-00000000000e
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000e
+      id: c0ffee03-0000-4000-8000-00000000000e
       version: -1
       name: Set ScriptResult - Multiple scripts matched
       description: Set a value in context under the key you entered.
@@ -834,12 +809,12 @@ tasks:
     isautoswitchedtoquietmode: false
   "15":
     id: "15"
-    taskid: 9a1b0003-0000-4000-8000-00000000000f
+    taskid: c0ffee03-0000-4000-8000-00000000000f
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-00000000000f
+      id: c0ffee03-0000-4000-8000-00000000000f
       version: -1
-      name: Set ScriptResult - Endpoint query failed
+      name: Set ScriptResult - Select failed
       description: Set a value in context under the key you entered.
       iscommand: false
       brand: ""
@@ -863,7 +838,7 @@ tasks:
                   simple: |-
                     {
                       "ok": false,
-                      "reason": "Failed to query endpoints (core-get-endpoints)."
+                      "reason": "Failed to select due endpoints (KoiScanTracker)."
                     }
               template_type:
                 value:
@@ -873,7 +848,7 @@ tasks:
         simple: "false"
     nexttasks:
       '#none#':
-      - "11"
+      - '11'
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -892,12 +867,12 @@ tasks:
     isautoswitchedtoquietmode: false
   "16":
     id: "16"
-    taskid: 9a1b0003-0000-4000-8000-000000000010
+    taskid: c0ffee03-0000-4000-8000-000000000010
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000010
+      id: c0ffee03-0000-4000-8000-000000000010
       version: -1
-      name: Set ScriptResult - No matching endpoints
+      name: Set ScriptResult - Nothing due
       description: Set a value in context under the key you entered.
       iscommand: false
       brand: ""
@@ -920,9 +895,9 @@ tasks:
                 value:
                   simple: |-
                     {
-                      "ok": false,
+                      "ok": true,
                       "skipped": true,
-                      "reason": "No connected, unisolated endpoints matched the target filters (os/groups/hostnames) — nothing to do this run."
+                      "reason": "No endpoints are currently due for scan."
                     }
               template_type:
                 value:
@@ -932,7 +907,7 @@ tasks:
         simple: "false"
     nexttasks:
       '#none#':
-      - "11"
+      - '23'
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -951,10 +926,10 @@ tasks:
     isautoswitchedtoquietmode: false
   "17":
     id: "17"
-    taskid: 9a1b0003-0000-4000-8000-000000000011
+    taskid: c0ffee03-0000-4000-8000-000000000011
     type: regular
     task:
-      id: 9a1b0003-0000-4000-8000-000000000011
+      id: c0ffee03-0000-4000-8000-000000000011
       version: -1
       name: Set ScriptResult - Execution failed
       description: Set a value in context under the key you entered.
@@ -980,7 +955,7 @@ tasks:
                   simple: |-
                     {
                       "ok": false,
-                      "reason": "Script execution failed (core-script-run) — see the error entries in the run's war room."
+                      "reason": "Script dispatch failed (core-script-run) — no action was created. See the war-room error entries."
                     }
               template_type:
                 value:
@@ -990,7 +965,7 @@ tasks:
         simple: "false"
     nexttasks:
       '#none#':
-      - "11"
+      - '23'
     separatecontext: false
     continueonerrortype: ""
     view: |-
@@ -998,6 +973,195 @@ tasks:
         "position": {
           "x": 2200,
           "y": 1885
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '21':
+    id: "21"
+    taskid: c0ffee03-0000-4000-8000-000000000021
+    type: condition
+    task:
+      id: c0ffee03-0000-4000-8000-000000000021
+      version: -1
+      name: Was the action dispatched?
+      description: core-script-run dispatches the action and then polls it. If an action_id exists the script IS running on the endpoints and only the poll expired — that is not an execution failure and must not raise a failure notification.
+      iscommand: false
+      brand: ""
+      type: condition
+    conditions:
+    - label: "yes"
+      condition:
+      - - left:
+            iscontext: true
+            value:
+              simple: Core.ScriptRun.action_id
+          operator: isNotEmpty
+          right:
+            value: {}
+    nexttasks:
+      '#default#':
+      - '17'
+      "yes":
+      - '22'
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 2420,
+          "y": 1885
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '22':
+    id: "22"
+    taskid: c0ffee03-0000-4000-8000-000000000022
+    type: regular
+    task:
+      id: c0ffee03-0000-4000-8000-000000000022
+      version: -1
+      name: Set ScriptResult - Polling timed out
+      description: The action was dispatched and is still running in Action Center; only the playbook's poll expired.
+      iscommand: false
+      brand: ""
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: ScriptResult
+      value:
+        complex:
+          root: .
+          transformers:
+          - operator: FormatTemplate
+            args:
+              ctx_data: {}
+              ctx_inc: {}
+              ctx_inputs: {}
+              keep_symbol_to_null: {}
+              template:
+                value:
+                  simple: |-
+                    {
+                      "ok": false,
+                      "timed_out": true,
+                      "reason": "Script was dispatched successfully but the playbook stopped polling before the action finished. The action is still running in Action Center and is expected to complete on its own. This is NOT an execution failure."
+                    }
+              template_type:
+                value:
+                  simple: json
+              variable_markers: {}
+      append:
+        simple: "false"
+    nexttasks:
+      '#none#':
+      - '24'
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 2420,
+          "y": 2070
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '23':
+    id: "23"
+    taskid: c0ffee03-0000-4000-8000-000000000023
+    type: regular
+    task:
+      id: c0ffee03-0000-4000-8000-000000000023
+      version: -1
+      name: Record scan counts
+      description: Records the number of endpoints targeted.
+      iscommand: false
+      brand: ""
+      script: SetAndHandleEmpty
+      type: regular
+    scriptarguments:
+      key:
+        simple: ScriptResult.scanned_count
+      value:
+        simple: ${KoiScanTracker.Select.connected_count}
+      append:
+        simple: "false"
+    nexttasks:
+      '#none#':
+      - '11'
+    separatecontext: false
+    continueonerrortype: ""
+    view: |-
+      {
+        "position": {
+          "x": 1770,
+          "y": 2255
+        }
+      }
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+    isoversize: false
+    isautoswitchedtoquietmode: false
+  '24':
+    id: "24"
+    taskid: c0ffee03-0000-4000-8000-000000000024
+    type: regular
+    task:
+      id: c0ffee03-0000-4000-8000-000000000024
+      version: -1
+      name: Mark endpoints scanned
+      description: Stamp last_scan=now for the dispatched endpoints (mark-on-dispatch).
+      iscommand: true
+      brand: ""
+      script: 'KoiScanTracker'
+      type: regular
+      scriptName: KoiScanTracker
+    scriptarguments:
+      action:
+        simple: mark
+      tracker_list:
+        simple: ${inputs.tracker_list}
+      endpoint_ids:
+        complex:
+          root: KoiScanTracker.Select.due_connected
+          transformers:
+          - operator: join
+            args:
+              separator:
+                value:
+                  simple: ','
+    nexttasks:
+      '#none#':
+      - '19'
+    separatecontext: false
+    continueonerror: true
+    continueonerrortype: errorPath
+    view: |-
+      {
+        "position": {
+          "x": 1770,
+          "y": 1145
         }
       }
     note: false
@@ -1024,39 +1188,42 @@ inputs:
   value: {}
   required: false
   description: The name of the script to execute, as shown in the Action Center Script Library. Ignored when script_uuid is provided.
-  playbookInputQuery: null
+  playbookInputQuery:
 - key: script_uuid
   value: {}
   required: false
   description: The UUID of the script to execute. Takes precedence over script_name.
-  playbookInputQuery: null
-- key: endpoint_os
-  value: {}
-  required: true
-  description: Target OS platform (Windows, macOS, or Linux — case-insensitive).
-  playbookInputQuery: null
-- key: endpoint_groups
-  value: {}
-  required: false
-  description: Endpoint group names to limit execution to. Either this or endpoint_hostnames must be provided.
-  playbookInputQuery: null
-- key: endpoint_hostnames
-  value: {}
-  required: false
-  description: Endpoint hostnames to limit execution to. Either this or endpoint_groups must be provided.
-  playbookInputQuery: null
+  playbookInputQuery:
 - key: polling_interval_in_seconds
   value:
     simple: "60"
   required: false
   description: How often to poll for script completion (seconds).
-  playbookInputQuery: null
+  playbookInputQuery:
 - key: timeout_in_seconds
   value:
     simple: "1800"
   required: false
   description: Overall timeout for the script execution (seconds).
-  playbookInputQuery: null
+  playbookInputQuery:
+- key: max_endpoints
+  value:
+    simple: "100"
+  required: false
+  description: "Maximum endpoints to target in one run, passed to core-get-endpoints as `limit`. VERIFIED HARD CAP: core-get-endpoints rejects any value above 100 with 'Search size must fulfill the requirement: 0 < search_size <= 100' (HTTP 500). Do NOT set this above 100. Without a limit the command returns only 30, so 100 is the safe maximum for a single run. Covering a group larger than 100 requires paginating the endpoint query (page/page_size) — see the release note; that is a separate change."
+  playbookInputQuery:
+- key: tracker_list
+  value:
+    simple: ""
+  required: false
+  description: "Name of the CSV List used as this scope's scan tracker (e.g. \"Koi Scan Tracker - Windows\")."
+  playbookInputQuery:
+- key: rescan_interval_hours
+  value:
+    simple: "720"
+  required: false
+  description: "Hours after which a scanned endpoint becomes due again."
+  playbookInputQuery:
 outputs:
 - contextPath: ScriptResult
   description: The structured result of the script execution.
@@ -1073,7 +1240,12 @@ outputs:
 - contextPath: ScriptResult.action_id
   description: The Action Center action ID of the script execution (on success).
   type: string
+- contextPath: ScriptResult.timed_out
+  description: 'True when the action was dispatched but the playbook''s poll expired. Not a failure.'
+  type: boolean
+- contextPath: ScriptResult.endpoint_count
+  description: 'Number of connected endpoints this run targeted.'
+  type: boolean
 tags:
 - koi
-- koi-ext
 quiet: false
