@@ -1,0 +1,65 @@
+commonfields:
+  id: KoiScanTracker
+  version: -1
+name: KoiScanTracker
+script: '-'
+type: python
+subtype: python3
+tags:
+- Utility
+comment: |-
+  Endpoint scan-coverage ledger for the Koi Script Runner. Owns a compact CSV List
+  (endpoint_id,last_scan-epoch) so the playbooks stay thin. Action-dispatched:
+  refresh (walk the group by first_seen and upsert ids), select (return up to `max`
+  due, currently-connected ids), mark (stamp last_scan=now — mark-on-dispatch).
+enabled: true
+args:
+- name: action
+  required: true
+  auto: PREDEFINED
+  predefined:
+  - refresh
+  - select
+  - mark
+  description: refresh = upsert group membership; select = return due & connected ids; mark = stamp last_scan=now.
+- name: tracker_list
+  required: true
+  description: Name of the CSV List used as the tracker for this scope (e.g. "Koi Scan Tracker - Windows").
+- name: group_name
+  description: (refresh) Endpoint group to walk. Optional; omit to walk all endpoints of the OS.
+- name: endpoint_os
+  description: (refresh) OS platform filter — Windows, macOS or Linux.
+- name: rescan_interval_hours
+  description: (select) Hours after which a scanned endpoint becomes due again. Default 720 (30 days).
+  defaultValue: "720"
+- name: max
+  description: (select) Maximum endpoints to return. Default 100 — the core-get-endpoints cap.
+  defaultValue: "100"
+- name: endpoint_ids
+  description: (mark) Comma-separated endpoint ids to stamp as scanned now.
+outputs:
+- contextPath: KoiScanTracker.Refresh.seen
+  description: Group endpoints seen during the walk.
+  type: Number
+- contextPath: KoiScanTracker.Refresh.added
+  description: New endpoints appended to the tracker.
+  type: Number
+- contextPath: KoiScanTracker.Refresh.total
+  description: Total endpoints now tracked.
+  type: Number
+- contextPath: KoiScanTracker.Select.due_connected
+  description: Due endpoints that are currently connected — ready to scan.
+  type: Unknown
+- contextPath: KoiScanTracker.Select.due_count
+  description: Total due endpoints (before the connected filter).
+  type: Number
+- contextPath: KoiScanTracker.Select.connected_count
+  description: Due endpoints that are currently connected.
+  type: Number
+- contextPath: KoiScanTracker.Mark.marked
+  description: Number of endpoints stamped as scanned.
+  type: Number
+scripttarget: 0
+runonce: false
+dockerimage: demisto/python3:3.11.10.116949
+fromversion: 8.2.0

@@ -1,0 +1,91 @@
+id: KOI Ext - Unified Refresh Entry
+version: -1
+name: KOI Ext - Unified Refresh Entry
+description: "Refreshes the scan tracker for a single Koi Script Runner configuration entry: enumerates the entry's endpoint group/OS and upserts membership into the entry's tracker List via KoiScanTracker."
+starttaskid: '0'
+inputs:
+- key: config_entry
+  value: {}
+  required: true
+  description: One parsed entry from the Koi Script Runner List.
+  playbookInputQuery:
+outputs: []
+tasks:
+  '0':
+    id: '0'
+    taskid: c0ffee04-0000-4000-8000-000000000000
+    type: start
+    task:
+      id: c0ffee04-0000-4000-8000-000000000000
+      version: -1
+      name: ''
+      iscommand: false
+      brand: ''
+      type: start
+    nexttasks:
+      '#none#':
+      - '1'
+    separatecontext: false
+    view: "{\n  \"position\": {\n    \"x\": 50,\n    \"y\": 50\n  }\n}"
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+  '1':
+    id: '1'
+    taskid: c0ffee04-0000-4000-8000-000000000001
+    type: regular
+    task:
+      id: c0ffee04-0000-4000-8000-000000000001
+      version: -1
+      name: Refresh the tracker for this entry
+      description: Enumerate the group/OS and upsert membership into the tracker List.
+      script: KoiScanTracker
+      scriptName: KoiScanTracker
+      iscommand: false
+      brand: ''
+      type: regular
+    scriptarguments:
+      action:
+        simple: refresh
+      tracker_list:
+        simple: ${inputs.config_entry.target.tracker_list}
+      group_name:
+        simple: ${inputs.config_entry.target.endpoint_groups.[0]}
+      endpoint_os:
+        simple: ${inputs.config_entry.target.endpoint_os}
+    continueonerror: true
+    continueonerrortype: ''
+    nexttasks:
+      '#none#':
+      - '2'
+    separatecontext: false
+    view: "{\n  \"position\": {\n    \"x\": 50,\n    \"y\": 195\n  }\n}"
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+  '2':
+    id: '2'
+    taskid: c0ffee04-0000-4000-8000-000000000002
+    type: title
+    task:
+      id: c0ffee04-0000-4000-8000-000000000002
+      version: -1
+      name: Done
+      type: title
+      iscommand: false
+      brand: ''
+    separatecontext: false
+    view: "{\n  \"position\": {\n    \"x\": 50,\n    \"y\": 340\n  }\n}"
+    note: false
+    timertriggers: []
+    ignoreworker: false
+    skipunavailable: false
+    quietmode: 0
+view: "{\n  \"position\": {\n    \"x\": 0,\n    \"y\": 0\n  }\n}"
+fromversion: 8.2.0
+contentitemexportablefields:
+  contentitemfields: {}
