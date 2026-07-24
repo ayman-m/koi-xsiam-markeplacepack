@@ -28,7 +28,7 @@ args:
 - name: group_name
   description: (refresh) Endpoint group to walk. Optional; omit to walk all endpoints of the OS.
 - name: endpoint_os
-  description: (refresh) OS platform filter — Windows, macOS or Linux.
+  description: (refresh, select) OS platform. On refresh it filters enumeration; on select it filters the connected-check so a wrong-OS row can never be dispatched to.
 - name: rescan_interval_hours
   description: (select) Hours after which a scanned endpoint becomes due again. Default 720 (30 days).
   defaultValue: "720"

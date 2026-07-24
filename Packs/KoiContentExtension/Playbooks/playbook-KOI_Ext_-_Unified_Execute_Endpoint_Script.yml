@@ -337,6 +337,8 @@ tasks:
               defaultValue:
                 value:
                   simple: '100'
+      endpoint_os:
+        simple: ${inputs.endpoint_os}
     nexttasks:
       '#error#':
       - '15'
@@ -1223,6 +1225,12 @@ inputs:
     simple: "720"
   required: false
   description: "Hours after which a scanned endpoint becomes due again."
+  playbookInputQuery:
+- key: endpoint_os
+  value:
+    simple: ""
+  required: false
+  description: "OS platform for this scope (Windows/macOS/Linux). Passed to select so the connected-check can never dispatch a wrong-OS endpoint."
   playbookInputQuery:
 outputs:
 - contextPath: ScriptResult

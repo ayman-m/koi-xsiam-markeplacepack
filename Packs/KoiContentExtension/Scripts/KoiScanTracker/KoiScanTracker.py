@@ -205,6 +205,8 @@ def action_select(a):
     connected = []
     if due:
         q = {"endpoint_id_list": ",".join(due), "status": "connected", "isolate": "unisolated"}
+        if a.get("endpoint_os"):                       # defensive: never let a wrong-OS row through
+            q["platform"] = str(a["endpoint_os"]).lower()
         present = {_eid(e) for e in get_endpoints_cmd(q)}
         connected = [eid for eid in due if eid in present]
 
