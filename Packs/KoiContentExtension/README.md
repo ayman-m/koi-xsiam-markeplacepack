@@ -36,9 +36,9 @@ The content items carry two different `fromversion` values, and that is correct,
 
 | Content | `fromversion` | Why |
 |---|---|---|
-| Parsing rule, modeling rule, dashboard | `8.4.0`, `supportedModules: [xsiam]` | XSIAM-only content types |
-| The 12 playbooks | `6.10.0` | Genuinely the correct playbook-format floor; the three `Unified *` playbooks in particular are portable XSOAR content that uses no XSIAM-only feature |
-| Incident type, 19 incident fields, layout | `6.10.0` | The presentation layer for KOI supply-chain / agentic alerts (**KOI Supply Chain Alert** type → `KOI Ext - Alert Triage` playbook + its layout). Fields map to the parsing rule's promoted columns and the triage/investigation playbook outputs; see ReleaseNotes 1.2.0 for how they populate |
+| Parsing rule, modeling rule, dashboard, **correlation rule** | `8.4.0`, `supportedModules: [xsiam]` | XSIAM-only content types |
+| The 13 playbooks | `6.10.0` | Genuinely the correct playbook-format floor; the three `Unified *` playbooks in particular are portable XSOAR content that uses no XSIAM-only feature |
+| **2 incident types**, 19 incident fields, layout | `6.10.0` | The presentation layer for KOI alerts — **KOI Supply Chain Alert** → `KOI Ext - Alert Triage`, and **KOI Gateway Approval** → `KOI Ext - Gateway Approval Triage`, both reusing the one layout. Fields map to the parsing rule's promoted columns and the playbook outputs; see ReleaseNotes 1.2.0 / 1.4.0 |
 
 The pack as a whole cannot function below **8.4.0**, because the rules and the dashboard cannot be
 installed below it, and because the KOI integration's event collector is XSIAM/platform-only (the
@@ -256,7 +256,7 @@ window. The 53rd is the duplication monitor added with the dedupe fix. All widge
 `koi_koi_raw` directly; none reference `xdm.*`, so the dashboard does not depend on the modeling
 rule, and none depends on a promoted column without an inline raw fallback (see caveat 1).
 
-### Playbooks (12)
+### Playbooks (13)
 
 | Playbook | Purpose |
 |---|---|
@@ -269,6 +269,7 @@ rule, and none depends on a promoted column without an inline raw fallback (see 
 | `KOI Ext - Enrich Item` | Sub-playbook. Lightweight reusable enrichment for a single item — inventory record plus endpoints. A trimmed standalone alternative to `Investigate Item` |
 | `KOI Ext - Block and Remediate` | Response: re-checks the item, recovers its `marketplace`, and adds it to the org blocklist |
 | `KOI Ext - MCP Server Audit` | Standalone/scheduled audit of MCP servers in the inventory (`koi-inventory-list view=mcp_servers`), reporting risky ones |
+| `KOI Ext - Gateway Approval Triage` | Triages a Supply Chain Gateway **access request** — the exception a user files after the gateway blocks their install. **Inverts** the inventory lookup into a detection (a blocked item is not in inventory, so *present-despite-block* is the finding), reconstructs the blocking policy from `koi-policy-list` / blocklist / allowlist, pulls request history via XQL, writes the evidence with `setAlert`, and stops at a **human** reviewer gate. Mutates **no** governance. Fired by the correlation rule + incident type below — see *Supply Chain Gateway content* |
 | `KOI Ext - Unified Script Runner` | Reads a Script Runner configuration list and dispatches each entry. **Additional content** — see below |
 | `KOI Ext - Unified Process Config Entry` | Sub-playbook. Validates one configuration entry, runs it, and mails the result |
 | `KOI Ext - Unified Execute Endpoint Script` | Sub-playbook. Resolves the script and target endpoints, runs the script, and polls for its result |
@@ -345,6 +346,80 @@ clean and there is one war-room summary per run.
 > `continueonerror`, and if the engine is absent the playbook posts *"XQL engine unavailable — hunt
 > sweep skipped"* and closes. The pack does **not** hard-depend on the engine — the `CortexXDR`
 > dependency stays `mandatory: false` (see below); only this one playbook needs it.
+
+---
+
+## Supply Chain Gateway content
+
+Added in **v1.3.0** (approval parsing + Theme G detections + the triage playbook) and **v1.4.0**
+(the correlation-rule trigger, the incident type, and the approval XDM mapping). Validated
+end-to-end against a live gateway on 23 July 2026; the full evidence is `VERIFIED_FACTS.md` §9 and
+`docs/GATEWAY_MODE.md`.
+
+### 🚨 The one fact that shapes all of it
+
+**The gateway's own Allowed/Blocked verdict log is console-only and never reaches XSIAM.**
+`koi_koi_raw` carries no gateway/block/network event type, and `_raw_log contains "Blocked"` returns
+zero rows. **You cannot detect or trigger on a block.** The observable proxy for a block is the
+user's reaction to it: the block page's *Request access* button emits an **`approval_requests`**
+audit row. Every gateway content item here is built on that row, not on the block.
+
+Two further facts, both live-verified, that the content encodes so you do not have to rediscover them:
+
+- **`approval_requests` rows have `action = null`.** The lifecycle state (submitted / approved /
+  rejected), requester, decider and risk live only in the free-text `message`.
+- **Neither the PAC nor the endpoint script populates gateway identity.** The Network Log's
+  `Identity` / `Group` columns were empty on every row inspected, on agent-enrolled *and* agent-less
+  endpoints. The requester email on a request is **self-asserted** on agent-less endpoints (the user
+  types it — a live row contained a misspelled corporate domain). Never key trust on it.
+
+### What ships for the gateway
+
+| Item | What it does |
+|---|---|
+| Parsing rule — `koi_approval_*` columns | Extracts `koi_approval_decision`, `koi_approval_requester`, `koi_approval_decider`, `koi_approval_risk` out of the free-text `message`, guarded on `type` so they stay null on all other audit rows. Live coverage (90 d): decision 11/11, requester 11/11, decider 5/11, risk 6/11 — the `[risk: …]` segment is legitimately optional |
+| Modeling rule — approval XDM | `xdm.event.outcome` is now **decision-aware** (a rejected request maps to `FAILED`, not the default `SUCCESS`), and `xdm.target.user.username` carries the requester on approval rows. Both validated on live rows |
+| Correlation rule — `KOI Ext - Gateway Approval Request` | **REAL_TIME** rule on `koi_koi_raw`. Fires when an `approval_requests` submission appears, and maps the item / marketplace / requester / risk into the KOI alert fields via `DATASET_MAPPING` (no classifier, no mapper) |
+| Incident type — `KOI Gateway Approval` | The alert type the correlation rule raises; `autorun: true` runs **`KOI Ext - Gateway Approval Triage`** and reuses the KOI Supply Chain Alert layout |
+| Playbook — `KOI Ext - Gateway Approval Triage` | See the playbook table above |
+| Detections — **Theme G** (`docs/DETECTION_QUERIES.md`, `docs/xql/G1..G6.xql`) | Six live-validated gateway queries: approval pressure, re-request after rejection, no-provenance installs, system-guardrail remediation, rejected-then-installed bypass, and the PAC coverage gap |
+| Docs | `docs/GATEWAY_MODE.md` (operator guide) and `docs/GATEWAY_NETWORK_INTEGRATION.md` (routing a firewall / proxy / SASE tier into the gateway, incl. Prisma Access and identity forwarding) |
+
+### How the trigger is wired
+
+```
+approval_requests row  →  KOI Ext - Gateway Approval Request (correlation rule, REAL_TIME)
+                       →  alert with koi* fields set via DATASET_MAPPING
+                       →  KOI Gateway Approval (incident type, autorun)
+                       →  KOI Ext - Gateway Approval Triage (playbook)
+```
+
+The playbook's inputs default from the alert fields (`${alert.koiitemname}`, `${alert.koimarketplace}`,
+`${alert.koideviceuser}`, `${alert.koirisklevel}`) — the same `${alert.*}` convention the Alert Triage
+chain uses.
+
+### Why a correlation rule here, and a Job for the hunt sweep
+
+A single user requesting access to a blocked item is an **event**, so it is a REAL_TIME correlation
+rule. The hunt sweep is a **scheduled** sweep with no triggering event, so it is a time-triggered Job
+(see *Scheduled hunt sweep* above). Same reason, opposite mechanism.
+
+> **Runtime binding is verified at deploy.** The content is schema-valid (`demisto-sdk validate`
+> passes) and the XQL is validated against a live tenant, but the correlation-rule → incident-type →
+> playbook chain has not been exercised on a tenant from here (the pack has never been uploaded and
+> run — see the top-level project notes). Confirm the alert raises and the playbook autoruns after
+> the first real deploy.
+
+### Gateway enforcement, and what the PAC does *not* cover
+
+Enforcement happens at **both** the store detail page (`chromewebstore.google.com/detail/<slug>/<id>/should-request-access`
+— the gateway appends `/should-request-access`) **and** the package download, and separately at the
+**code-package registry** (`registry.npmjs.org` etc.). That last one is **not in the PAC** — a PAC
+is a browser/OS-proxy mechanism and `npm`/`pip` do not read it. npm/PyPI are governed instead by
+KOI's **registry** approach (SWG-tier routing, a repository-manager upstream, or per-endpoint
+`.npmrc`/`pip.conf`), which needs no CA. On one measured estate ~9 in 10 installs with a known source
+were outside PAC scope, so plan the code-package path deliberately. Full detail in
+`docs/GATEWAY_NETWORK_INTEGRATION.md`.
 
 ---
 

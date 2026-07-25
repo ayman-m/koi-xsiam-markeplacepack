@@ -305,8 +305,10 @@ filter source_log_type = "Audit"
     // convention treats archive as a state change rather than a removal,
     // switch it to OPERATION_TYPE_UPDATE — it is 2,969 rows either way, so
     // decide deliberately rather than inheriting this.
-    // Still null after this chain: the 8 approval_requests rows, where the
-    // raw `action` column itself is NULL. Nothing to map there.
+    // approval_requests rows have a NULL raw `action`, so xdm.event.operation
+    // stays null for them below — a "request access" is not a CRUD on the item.
+    // Their OUTCOME and TARGET USER are mapped instead, further down, from the
+    // parsing rule's koi_approval_* columns (added 25 July 2026).
     xdm.event.operation = if(
         action = "created",      XDM_CONST.OPERATION_TYPE_CREATE,
         action = "installed",    XDM_CONST.OPERATION_TYPE_CREATE,
@@ -320,13 +322,19 @@ filter source_log_type = "Audit"
         action = "archived",     XDM_CONST.OPERATION_TYPE_DELETE,              // ADDED
         action ~= "(?i)remediation.*", XDM_CONST.OPERATION_TYPE_EXECUTION,
         to_string(null)),
-    // No explicit success/fail flag in Koi audit; default SUCCESS, but keep
-    // the failure regex so a future failure verb is caught automatically.
-    // Live: resolves SUCCESS on every audit row (20,142/20,142 as of
-    // 21 July 2026) — the regex never matches because no failure action exists
-    // in this data. Unvalidatable here.
-    xdm.event.outcome = if(action ~= "(?i).*(failed|error|deny|denied|reject).*",
-                          XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_SUCCESS),
+    // outcome — DECISION-AWARE for approval requests (added 25 July 2026).
+    // The raw `action` is NULL on approval_requests rows, so without the first
+    // branch a REJECTED exception request maps to SUCCESS (the default) — a real
+    // defect, since a rejection is the one unambiguous FAILED outcome in this
+    // stream. koi_approval_decision is the parsing-rule column carrying
+    // submitted / approved / rejected. Everything else keeps the prior behaviour:
+    // the failure regex on `action` (kept so a future failure verb is caught
+    // automatically), else SUCCESS. Note a "submitted" request is left SUCCESS
+    // deliberately — the submission itself succeeded; its verdict is pending.
+    xdm.event.outcome = if(
+        koi_approval_decision = "rejected", XDM_CONST.OUTCOME_FAILED,
+        action ~= "(?i).*(failed|error|deny|denied|reject).*", XDM_CONST.OUTCOME_FAILED,
+        XDM_CONST.OUTCOME_SUCCESS),
     // Actor (initiator).
     xdm.source.user.username  = triggered_by,
     // Keyed on triggered_by ALONE, not on category.
@@ -342,6 +350,17 @@ filter source_log_type = "Audit"
     xdm.source.user.user_type = if(triggered_by = "Koi",
                                    XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
                                    XDM_CONST.USER_TYPE_REGULAR),
+    // Subject of an approval request — the user the exception is FOR (added
+    // 25 July 2026). On a SUBMIT row this equals the actor (source.user); on a
+    // DECISION row the actor is the decider (triggered_by) while this stays the
+    // original requester, so source + target together capture "who decided about
+    // whom". Guarded to approval_requests so it is null on every other audit row.
+    // ⚠️ IDENTITY IS SELF-ASSERTED on gateway-only endpoints (no Koi agent): the
+    // requester types their own email, so this can be a claim rather than a
+    // verified identity. Do not key trust on it. See the parsing rule and
+    // docs/GATEWAY_MODE.md.
+    xdm.target.user.username = if(type = "approval_requests",
+                                  koi_approval_requester, to_string(null)),
     // Target object acted upon.
     xdm.target.resource.id       = object_id,
     xdm.target.resource.name     = object_name,

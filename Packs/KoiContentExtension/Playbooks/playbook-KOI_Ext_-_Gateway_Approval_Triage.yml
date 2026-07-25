@@ -568,9 +568,10 @@ tasks:
     isautoswitchedtoquietmode: false
 inputs:
 - key: item_name
-  value: {}
+  value:
+    simple: ${alert.koiitemname}
   required: true
-  description: 'Display name of the requested item, from the approval_requests audit row (object_name). Matched as a case-insensitive SUBSTRING against inventory.'
+  description: 'Display name of the requested item, from the approval_requests audit row (object_name). Matched as a case-insensitive SUBSTRING against inventory. On autorun this defaults from the alert field the KOI Ext - Gateway Approval Request correlation rule populates.'
   playbookInputQuery: null
 - key: marketplace
   value: {}
@@ -578,22 +579,26 @@ inputs:
   description: 'Marketplace in the API LONG vocabulary (chrome_web_store, vscode, windows). Optional filter on the inventory lookup. Use the parsing rule''s marketplace_api, never the raw event value.'
   playbookInputQuery: null
 - key: marketplace_raw
-  value: {}
+  value:
+    simple: ${alert.koimarketplace}
   required: false
   description: 'Marketplace exactly as the event stated it, in the SHORT vocabulary (chrome, vsc, software_windows). Recorded for the audit trail; never passed to a command.'
   playbookInputQuery: null
 - key: requester
-  value: {}
+  value:
+    simple: ${alert.koideviceuser}
   required: false
   description: 'Email of the requester. SELF-ASSERTED and unverified on endpoints without the KOI agent - never gate a decision on it.'
   playbookInputQuery: null
 - key: decision
-  value: {}
+  value:
+    simple: submitted
   required: false
-  description: 'Current lifecycle state parsed from the event message: submitted, rejected or approved.'
+  description: 'Current lifecycle state parsed from the event message: submitted, rejected or approved. Defaults to submitted because the correlation rule fires on the submission event.'
   playbookInputQuery: null
 - key: risk
-  value: {}
+  value:
+    simple: ${alert.koirisklevel}
   required: false
   description: 'Risk level as stated in the event message. Frequently ABSENT - the [risk: ..] segment is optional (6 of 11 rows carried it on 2026-07-23).'
   playbookInputQuery: null

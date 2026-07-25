@@ -1,0 +1,45 @@
+global_rule_id: koi_ext_gateway_approval_request
+name: KOI Ext - Gateway Approval Request
+alert_name: KOI Gateway - access requested for a blocked item
+alert_category: Software Supply Chain
+description: |-
+  Raises an alert when an end user files an access request from the KOI Supply Chain
+  Gateway block page, i.e. an `approval_requests` audit row appears in koi_koi_raw. This is
+  the event that drives the KOI Ext - Gateway Approval Triage playbook.
+
+  WHY THIS IS THE TRIGGER, AND WHY IT IS NOT ON THE BLOCK ITSELF. The gateway's own
+  Allowed/Blocked verdict log is console-only and never reaches XSIAM (verified: koi_koi_raw
+  carries no gateway/block/network event type). The observable proxy for a block is the user's
+  reaction to it - the "Request access" button on the block page - which emits an
+  approval_requests row. So this rule fires on the request, not the block.
+
+  This is REAL_TIME and event-driven by design. Scheduled sweeps (the hunt library) are driven
+  by Jobs; a single user asking for access to a blocked item is an event, so it is a correlation
+  rule.
+alert_description: |-
+  A user requested access to a marketplace item that the KOI gateway blocked. Review the item's
+  risk and the request history, then approve or reject in the KOI console. The requester email is
+  self-asserted on endpoints without the KOI agent - treat it as a claim, not an identity.
+dataset: koi_koi_raw
+execution_mode: REAL_TIME
+severity: SEV_030_MEDIUM
+suppression_enabled: false
+drilldown_query_timeframe: ALERT
+mapping_strategy: DATASET_MAPPING
+xql_query: |-
+  dataset = koi_koi_raw
+  | filter type = "approval_requests" and message contains "submitted by"
+  // Emit columns named for the KOI incident-field cliNames so DATASET_MAPPING populates the
+  // alert fields directly - no classifier or mapper, matching the rest of this pack. The
+  // extraction mirrors the parsing rule; it is inline here because a correlation rule reads the
+  // raw stream, where the parsing-rule columns do not yet exist at match time.
+  | alter
+      koiitemname    = object_name,
+      koimarketplace = marketplace,
+      koideviceuser  = coalesce(
+          arrayindex(regextract(message, "submitted by\s+(\S+)"), 0),
+          arrayindex(regextract(message, "by\s+(\S+)\s+was\s+(?:rejected|approved)"), 0)),
+      koirisklevel   = arrayindex(regextract(message, "\[risk:\s*([a-zA-Z]+)\]"), 0),
+      koiverdict     = "APPROVAL_REQUESTED"
+  | fields _time, koiitemname, koimarketplace, koideviceuser, koirisklevel, koiverdict, message
+fromversion: 6.10.0
