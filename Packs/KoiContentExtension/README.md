@@ -325,7 +325,12 @@ no resident agent), so a scheduled Job is the hunt scheduler, exactly as it is f
 
 ### Attach it to a Job
 
-Mirror the way `KOI Ext - Unified Script Runner` is scheduled:
+**A ready-made Job ships with this pack — `KOI Ext - Scheduled Hunt Sweep`** (recurrent, default
+every 24 h, bound to `KOI Ext - Hunt Sweep`). On install it appears under **Jobs**; **review its
+cadence and inputs and enable it deliberately** — each run opens an investigation and posts a
+war-room summary, so you do not want it firing unreviewed in a shared tenant. To build your own
+instead (e.g. a different cadence, or a report-only variant), mirror the way
+`KOI Ext - Unified Script Runner` is scheduled:
 
 1. **Settings → Investigation & Response → Jobs → New Job.**
 2. Choose **Scheduled** (time-triggered) and set the cadence (e.g. every 12 or 24 hours, or a cron

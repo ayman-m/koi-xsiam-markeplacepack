@@ -1,0 +1,29 @@
+{
+    "id": "KOI Ext - Scheduled Hunt Sweep",
+    "name": "KOI Ext - Scheduled Hunt Sweep",
+    "playbookId": "KOI Ext - Hunt Sweep",
+    "details": "Time-triggered proactive hunt sweep. Runs the KOI Ext - Hunt Sweep playbook on a schedule: executes the configured hunting XQL queries, investigates every match, posts a war-room summary, and routes confirmed ungoverned known-bad to an analyst-gated block (auto_block is always false). This is a SCHEDULED job, not a feed or event trigger - a scheduled sweep has no triggering event, so it is a Job rather than a correlation rule. Requires the Cortex XDR - XQL Query Engine integration (the playbook degrades gracefully if it is absent) and a configured KOI instance. Adjust the cadence and, if needed, override the playbook inputs (hunt_set, xql_time_frame, enable_response_gate) on this job. REVIEW BEFORE ENABLING in a shared environment - each run opens an investigation and posts a summary.",
+    "description": "Scheduled proactive KOI supply-chain hunt sweep (runs KOI Ext - Hunt Sweep).",
+    "type": "Unclassified",
+    "scheduled": true,
+    "recurrent": true,
+    "cronView": false,
+    "humanCron": {
+        "timePeriodType": "hours",
+        "timePeriod": 24
+    },
+    "startDate": "2026-01-01T00:00:00Z",
+    "endingDate": "0001-01-01T00:00:00Z",
+    "timezoneOffset": 0,
+    "timezone": "",
+    "times": 0,
+    "shouldTriggerNew": true,
+    "closePrevRun": false,
+    "notifyOwner": false,
+    "severity": 0,
+    "tags": [],
+    "isFeed": false,
+    "selectedFeeds": [],
+    "isAllFeeds": false,
+    "fromVersion": "6.10.0"
+}
