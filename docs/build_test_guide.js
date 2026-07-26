@@ -396,7 +396,7 @@ testSlide("Test 7", "Proactive hunting",
   });
   s.addText("Plus:", { x: M + 0.3, y: 3.50, w: 1.0, h: 0.24, fontSize: 10, italic: true,
     color: MUTED, fontFace: F, margin: 0, valign: "top" });
-  s.addText("KoiScanTracker — an automation, not a playbook. Ours, and different from the KOI deployment script opposite. For manual upload use dist/automation-KoiScanTracker.yml (one file).",
+  s.addText("KoiScanTracker — an automation, not a playbook. Ours, and different from the KOI deployment script opposite. Manual upload takes exactly one file: dist/automation-KoiScanTracker.yml",
     { x: M + 0.42, y: 3.74, w: lw - 0.7, h: 0.62, fontSize: 10.5, color: BODY, fontFace: F,
       margin: 0, lineSpacing: 12, valign: "top" });
 
@@ -415,7 +415,8 @@ testSlide("Test 7", "Proactive hunting",
   rowList(s, [
     "Installed the whole pack? All of the above is already on the tenant — go straight to test 8.",
     "Uploading selectively? Automation → Playbooks → Import for the five playbooks, in the order listed.",
-    "Automation → Scripts → Import for KoiScanTracker — upload dist/automation-KoiScanTracker.yml. One file, code already inside; do not upload the two files under Scripts/.",
+    "Automation → Scripts → Import → dist/automation-KoiScanTracker.yml. Open it first and you will see the Python inside it.",
+    "Not Scripts/KoiScanTracker/KoiScanTracker.yml — that file reads script: '-' on purpose and would import an empty automation.",
     "Settings → Object Setup → Lists → New List, type JSON, named exactly Koi Script Runner. Paste the block from Lists/README.md.",
     "Edit two things in that List: endpoint_groups and script.name. One entry per OS; the rest has working defaults.",
   ], M + 0.34, 5.18, W - 0.68, "num");
