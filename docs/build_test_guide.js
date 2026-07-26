@@ -225,12 +225,15 @@ const testSlide = (kicker, title, content, needs, steps, expects) => {
     s.addText(t, { x: x + 0.3, y: 1.85, w: cw - 0.6, h: 0.3, fontSize: 11, bold: true, color: c, fontFace: F, charSpacing: 1.5, margin: 0, valign: "top" });
     s.addText(d, { x: x + 0.3, y: 2.25, w: cw - 0.6, h: 1.7, fontSize: 11, color: BODY, fontFace: F, margin: 0, lineSpacing: 14, valign: "top" });
   });
-  card(s, M, 4.35, W, 1.5, CARD_HI);
-  s.addText("Run them in order the first time", { x: M + 0.34, y: 4.55, w: 5.0, h: 0.3, fontSize: 13, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "top" });
+  card(s, M, 4.32, W, 2.05, CARD_HI);
+  s.addText("Installed the pack, or uploading piece by piece?", { x: M + 0.34, y: 4.5, w: 7.0, h: 0.3, fontSize: 13, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "top" });
+  s.addText("Install the whole pack and every playbook, automation, rule and the Koi Script Runner List are already on the tenant — nothing to upload. If you upload selectively instead, the PACK CONTENT column on each test is your upload checklist for that test.",
+    { x: M + 0.34, y: 4.85, w: W - 0.68, h: 0.6, fontSize: 11, color: BODY, fontFace: F, margin: 0, lineSpacing: 14, valign: "top" });
+  s.addText("Run them in order the first time", { x: M + 0.34, y: 5.5, w: 5.0, h: 0.3, fontSize: 13, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "top" });
   s.addText("Tests 1 to 3 prove data is arriving and correct. Tests 4 to 7 prove the automation. Tests 8 and 9 prove fleet script execution — the only ones needing the Core REST API integration. Test 10 is the alert layout. Nothing here needs a Cortex XDR integration: XSIAM is the XDR, and its XQL engine is built in.",
-    { x: M + 0.34, y: 4.92, w: W - 0.68, h: 0.8, fontSize: 11, color: BODY, fontFace: F, margin: 0, lineSpacing: 14, valign: "top" });
+    { x: M + 0.34, y: 5.85, w: W - 0.68, h: 0.55, fontSize: 11, color: BODY, fontFace: F, margin: 0, lineSpacing: 13, valign: "top" });
   s.addText("Each test lists its own prerequisites — set those up first and the test runs straight through.",
-    { x: M, y: 6.15, w: W, h: 0.3, fontSize: 11, italic: true, color: MUTED, fontFace: F, margin: 0, valign: "top" });
+    { x: M, y: 6.6, w: W, h: 0.3, fontSize: 11, italic: true, color: MUTED, fontFace: F, margin: 0, valign: "top" });
 }
 
 /* ============================ 4. Prerequisites ============================ */
@@ -375,8 +378,8 @@ testSlide("Test 8", "Script Runner — refresh the tracker",
    "The KOI deployment script — download it from YOUR KOI console, then upload it to Action Center → Scripts Library. This is KOI\'s script, not a Cortex one. It must take no parameters",
    "An endpoint group — tag the agents, then use a dynamic group",
    'The Koi Script Runner List created (step 1)'],
-  ["Settings → Object Setup → Lists → New List, type JSON, named exactly Koi Script Runner.",
-   "Open Lists/README.md in the pack and copy the JSON block — it is formatted ready to paste (do NOT copy from list-Koi_Script_Runner.json; its data field is escaped).",
+  ["If you installed the pack: the Koi Script Runner List is already there — open Settings → Object Setup → Lists and go to the next step.",
+   "If you uploaded selectively: upload the playbooks and automation listed under PACK CONTENT, then create the List — New List, type JSON, named exactly Koi Script Runner — and paste the block from Lists/README.md (not from list-Koi_Script_Runner.json; its data field is escaped).",
    "Edit two things only: endpoint_groups (your group) and script.name (the KOI script exactly as it appears in Action Center). One entry per OS.",
    "Everything else — tracker_list, rescan_interval_hours, max_endpoints — already has working defaults.",
    "Automation → Jobs → New Job, time-triggered, playbook KOI Ext Script Runner - Refresh Job. Enable it, then Run now."],
