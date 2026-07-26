@@ -30,8 +30,7 @@ that the SDK wraps the body in
 `register_module_line` is defined in CommonServerPython, and the SDK only inlines that
 library into scripts that import it. KoiScanTracker deliberately does not — it is
 self-contained so it can be uploaded raw — so the SDK's own output would call a name
-that does not exist at runtime. Omitting those two lines is correct here, not drift.
-Re-run the diff before "fixing" this to match the SDK.
+that does not exist at runtime, so those two lines are omitted here deliberately.
 
 Output: dist/automation-KoiScanTracker.yml — generated, never edited by hand.
 
