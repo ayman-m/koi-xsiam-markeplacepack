@@ -37,6 +37,11 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# ...except the pack's own dist/, which is delivered content, not a build artifact:
+# it holds the single-file automation a manual console import needs. The rule above is
+# Python-packaging boilerplate and silently kept it off GitHub, while the test guide
+# told testers to upload it.
+!Packs/KoiContentExtension/dist/
 downloads/
 eggs/
 .eggs/
