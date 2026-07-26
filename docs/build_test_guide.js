@@ -152,7 +152,13 @@ const testSlide = (kicker, title, content, needs, steps, expects) => {
   const sw = 7.0, ew = W - sw - 0.4, ex = M + sw + 0.4;
   const bottom = 7.5 - 0.30;
   const need = Math.max(estH(steps, sw - 0.68), estH(expects, ew - 0.68)) + 0.86;
-  const ch = Math.max(1.7, Math.min(need, bottom - top));
+  // Fail the build rather than clip. Text that overruns its card still sits inside the
+  // slide, so a slide-bounds check does not catch it — this does.
+  if (need > bottom - top)
+    throw new Error(
+      `${kicker} "${title}": content needs ${need.toFixed(2)}in but only ` +
+      `${(bottom - top).toFixed(2)}in is free. Split the slide or shorten the steps.`);
+  const ch = Math.max(1.7, need);
 
   card(s, M, top, sw, ch);
   s.addText("Steps", { x: M + 0.34, y: top + 0.2, w: 3.0, h: 0.28, fontSize: 12,
@@ -369,20 +375,58 @@ testSlide("Test 7", "Proactive hunting",
    "Block candidates are routed to an analyst gate, never blocked automatically."]
 );
 
+/* ---------- Script Runner: what to put in place (its own slide) ---------- */
+{
+  const s = newSlide();
+  heading(s, "Tests 8 and 9 — prepare", "Script Runner: everything this use case needs");
+  const lw = 6.5, rw = W - lw - 0.4, rx = M + lw + 0.4;
+
+  card(s, M, 1.42, lw, 3.05);
+  s.addText("PACK CONTENT — all of it", { x: M + 0.3, y: 1.60, w: lw - 0.6, h: 0.26, fontSize: 10.5,
+    bold: true, color: CYAN, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
+  s.addText("Five playbooks — import child before parent:", { x: M + 0.3, y: 1.92, w: lw - 0.6, h: 0.24,
+    fontSize: 10, italic: true, color: MUTED, fontFace: F, margin: 0, valign: "top" });
+  ["1  KOI Ext Script Runner - Execute Endpoint Script",
+   "2  KOI Ext Script Runner - Process Config Entry",
+   "3  KOI Ext Script Runner - Refresh Entry",
+   "4  KOI Ext Script Runner - Refresh Job",
+   "5  KOI Ext Script Runner - Scan Job"].forEach((t, i) => {
+    s.addText(t, { x: M + 0.42, y: 2.20 + i * 0.245, w: lw - 0.7, h: 0.24, fontSize: 10.5,
+      color: BODY, fontFace: F, margin: 0, valign: "top" });
+  });
+  s.addText("Plus:", { x: M + 0.3, y: 3.50, w: 1.0, h: 0.24, fontSize: 10, italic: true,
+    color: MUTED, fontFace: F, margin: 0, valign: "top" });
+  s.addText("KoiScanTracker — an automation, not a playbook. Ours, and different from the KOI deployment script opposite. For manual upload use dist/automation-KoiScanTracker.yml (one file).",
+    { x: M + 0.42, y: 3.74, w: lw - 0.7, h: 0.62, fontSize: 10.5, color: BODY, fontFace: F,
+      margin: 0, lineSpacing: 12, valign: "top" });
+
+  card(s, rx, 1.42, rw, 3.05, CARD_HI);
+  s.addText("TENANT SETUP", { x: rx + 0.3, y: 1.60, w: rw - 0.6, h: 0.26, fontSize: 10.5,
+    bold: true, color: AMBER, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
+  rowList(s, [
+    "Core REST API integration instance — the Refresh job reads endpoint groups through it.",
+    "The KOI deployment script in Action Center → Scripts Library. Download it from YOUR KOI console; it is KOI's script, not a Cortex one, and must take no parameters.",
+    "An endpoint group — tag the agents, then build a dynamic group on that tag.",
+  ], rx + 0.34, 1.94, rw - 0.68, "tick");
+
+  card(s, M, 4.58, W, 2.62);
+  s.addText("Do this once, before tests 8 and 9", { x: M + 0.34, y: 4.80, w: 6.0, h: 0.28,
+    fontSize: 12, bold: true, color: ORANGE, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
+  rowList(s, [
+    "Installed the whole pack? All of the above is already on the tenant — go straight to test 8.",
+    "Uploading selectively? Automation → Playbooks → Import for the five playbooks, in the order listed.",
+    "Automation → Scripts → Import for KoiScanTracker — upload dist/automation-KoiScanTracker.yml. One file, code already inside; do not upload the two files under Scripts/.",
+    "Settings → Object Setup → Lists → New List, type JSON, named exactly Koi Script Runner. Paste the block from Lists/README.md.",
+    "Edit two things in that List: endpoint_groups and script.name. One entry per OS; the rest has working defaults.",
+  ], M + 0.34, 5.18, W - 0.68, "num");
+}
+
 testSlide("Test 8", "Script Runner — refresh the tracker",
-  ["KOI Ext Script Runner - Refresh Job",
-   "KOI Ext Script Runner - Refresh Entry",
-   "KoiScanTracker  (our automation \u2014 not the KOI script)",
-   "List: Koi Script Runner"],
-  ["Core REST API integration instance configured  ← the one people miss",
-   "The KOI deployment script — download it from YOUR KOI console, then upload it to Action Center → Scripts Library. This is KOI\'s script, not a Cortex one. It must take no parameters",
-   "An endpoint group — tag the agents, then use a dynamic group",
-   'The Koi Script Runner List created (step 1)'],
-  ["If you installed the pack: the Koi Script Runner List is already there — open Settings → Object Setup → Lists and go to the next step.",
-   "If you uploaded selectively: upload the playbooks and automation listed under PACK CONTENT, then create the List — New List, type JSON, named exactly Koi Script Runner — and paste the block from Lists/README.md (not from list-Koi_Script_Runner.json; its data field is escaped).",
-   "Edit two things only: endpoint_groups (your group) and script.name (the KOI script exactly as it appears in Action Center). One entry per OS.",
-   "Everything else — tracker_list, rescan_interval_hours, max_endpoints — already has working defaults.",
-   "Automation → Jobs → New Job, time-triggered, playbook KOI Ext Script Runner - Refresh Job. Enable it, then Run now."],
+  ["KOI Ext Script Runner - Refresh Job", "KOI Ext Script Runner - Refresh Entry",
+   "KoiScanTracker  (automation)", "List: Koi Script Runner"],
+  ["Everything on the previous slide is in place"],
+  ["Automation → Jobs → New Job, time-triggered, playbook KOI Ext Script Runner - Refresh Job.",
+   "Enable the Job, then use Run now."],
   ["A tracker List appears under Lists, named as in your entry.",
    "It fills with one row per endpoint: an id and a last-scan value.",
    "Re-running adds new endpoints without disturbing existing rows."]
