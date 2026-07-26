@@ -76,7 +76,7 @@ flowchart LR
 
     subgraph HUNT["Detection & hunting"]
         QLIB["Query libraries<br/>45 detection + 26 hunting"]
-        SWEEP["KOI Ext - Hunt Sweep<br/>scheduled Job"]
+        SWEEP["KOI Ext Hunting - Hunt Sweep<br/>scheduled Job"]
     end
 
     XDR --> QLIB

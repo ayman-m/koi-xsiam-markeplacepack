@@ -340,7 +340,7 @@ absent: the pack installs and every KOI-command playbook works with no XQL engin
 **Rationale — graceful degradation.** XQL can be slow, rate-limited, or the engine can be absent.
 Each enrichment is a separate lane branched off the existing flow; it does not feed the verdict, the
 analyst gate, or the auto-close. When it errors, the war-room note states plainly that the enrichment
-degraded — so a blank is never mistaken for "nothing found". `KOI Ext - Hunt Sweep` is the one
+degraded — so a blank is never mistaken for "nothing found". `KOI Ext Hunting - Hunt Sweep` is the one
 playbook whose whole purpose is running XQL, so in practice it needs the engine — but even it fails
 gracefully, posting *"XQL engine unavailable — hunt sweep skipped"* rather than erroring. The
 `CortexXDR` dependency stays optional so the pack never forces an install.
@@ -369,7 +369,7 @@ correlatable on host and time. Three concrete joins the content implements:
 
 **Example 1 — a KOI-risky item observed executing.** KOI raises an alert (or carries an inventory
 record) that item *X* is high-risk or known-bad — e.g. an npm package caught by the `NPM Block CS`
-policy. On its own that is a posture finding. `KOI Ext - Investigate Item` runs the Theme-D/**D2**
+policy. On its own that is a posture finding. `KOI Ext IR - Investigate Item` runs the Theme-D/**D2**
 XQL keyed on `Inv.item_id` fleet-wide, asking whether anything from that item's install path
 actually executed, loaded, or was written to disk in `xdr_data`. A risky item that never ran is a
 lower priority than the same item observed executing — a distinction KOI cannot make alone
@@ -377,7 +377,7 @@ lower priority than the same item observed executing — a distinction KOI canno
 
 **Example 2 — a shadow MCP server.** KOI inventories MCP servers, but a bare config-only declaration
 did **not** register within 40 minutes when no recognised client was installed (§7d.2c — qualified).
-The `KOI Ext - Hunt Sweep` **H4.2** hunt inverts the question: it looks for **shadow agentic
+The `KOI Ext Hunting - Hunt Sweep` **H4.2** hunt inverts the question: it looks for **shadow agentic
 software** — MCP or AI-agent processes *executing in `xdr_data`* that KOI never inventoried. A hit is
 an agentic runtime KOI's supply-chain view is blind to. The join is the whole detection: KOI's
 inventory is the allow-set, XDR's runtime is the observed-set, and the gap between them is the lead

@@ -1,10 +1,10 @@
-id: KOI Ext - Unified Script Runner
+id: KOI Ext Script Runner - Scan Job
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Unified Script Runner
+name: KOI Ext Script Runner - Scan Job
 description: |-
   Main job playbook: reads the "Koi Script Runner" configuration List (a JSON
-  array of entries), then runs "KOI Ext - Unified Process Config Entry" for every
+  array of entries), then runs "KOI Ext Script Runner - Process Config Entry" for every
   entry. Designed to be attached to a time-triggered Job.
 
   Each list entry defines: script.name (or script.uuid), target.endpoint_os,
@@ -143,7 +143,7 @@ tasks:
       version: -1
       name: Process each configuration entry
       description: Runs the Koi script for every configuration entry (invalid entries are reported by the sub-playbook).
-      playbookId: KOI Ext - Unified Process Config Entry
+      playbookId: KOI Ext Script Runner - Process Config Entry
       iscommand: false
       brand: ""
       type: playbook

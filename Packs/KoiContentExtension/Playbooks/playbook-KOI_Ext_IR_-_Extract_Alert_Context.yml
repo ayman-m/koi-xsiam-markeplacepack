@@ -1,7 +1,7 @@
-id: KOI Ext - Extract Alert Context
+id: KOI Ext IR - Extract Alert Context
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Extract Alert Context
+name: KOI Ext IR - Extract Alert Context
 description: |-
   Sub-playbook. Builds the KoiContext object that the rest of the KOI Ext triage chain
   consumes, by reading the KOI alert's OWN OCSF payload.
@@ -49,7 +49,7 @@ description: |-
   (item.id, device.id, finding_info.uid, finding_info.created_time). It is 100% populated.
   finding_uid (3 distinct) is the POLICY id and koi_event_id (20 distinct) is the SCAN BATCH
   id - neither identifies an alert. This playbook therefore publishes
-  KoiContext.notification_id, and KOI Ext - Alert Triage uses it to suppress duplicate
+  KoiContext.notification_id, and KOI Ext IR - Alert Triage uses it to suppress duplicate
   investigations. See that playbook's description for the correlation-rule configuration
   that has to accompany it.
 
@@ -255,7 +255,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000025
       version: -1
       name: Parse metadata
-      description: 'The alert''s metadata column is a JSON STRING containing a plain object (NOT an array) - {notification_event_id, version, ...}. ParseJSON it into KoiRaw.metadata before any accessor is used. Because it is an object rather than an array, the next task needs one accessor and no filter; do not copy the observables/resources filter pattern onto it. Best-effort: if the alert does not carry metadata the chain continues and notification_id is simply empty, which disables duplicate suppression in KOI Ext - Alert Triage rather than breaking it.'
+      description: 'The alert''s metadata column is a JSON STRING containing a plain object (NOT an array) - {notification_event_id, version, ...}. ParseJSON it into KoiRaw.metadata before any accessor is used. Because it is an object rather than an array, the next task needs one accessor and no filter; do not copy the observables/resources filter pattern onto it. Best-effort: if the alert does not carry metadata the chain continues and notification_id is simply empty, which disables duplicate suppression in KOI Ext IR - Alert Triage rather than breaking it.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -294,7 +294,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000026
       version: -1
       name: Set notification_id (the alert identity)
-      description: 'metadata.notification_event_id. THE ONLY FIELD THAT IDENTIFIES AN ALERT OCCURRENCE. Coverage 100%; 317 distinct values across 1,172 rows over 90 days, and a verified 1:1 identity for (item.id, device.id, finding_info.uid, finding_info.created_time). The KOI integration re-sends every still-open alert once a minute, so the same notification_id arrives many times - 408 times for one mcp_server alert. Do NOT substitute finding_uid (3 distinct - it is the POLICY id) or koi_event_id (20 distinct - it is the SCAN BATCH id); both were measured and both are far too coarse. KOI Ext - Alert Triage keys its duplicate-suppression gate on this value.'
+      description: 'metadata.notification_event_id. THE ONLY FIELD THAT IDENTIFIES AN ALERT OCCURRENCE. Coverage 100%; 317 distinct values across 1,172 rows over 90 days, and a verified 1:1 identity for (item.id, device.id, finding_info.uid, finding_info.created_time). The KOI integration re-sends every still-open alert once a minute, so the same notification_id arrives many times - 408 times for one mcp_server alert. Do NOT substitute finding_uid (3 distinct - it is the POLICY id) or koi_event_id (20 distinct - it is the SCAN BATCH id); both were measured and both are far too coarse. KOI Ext IR - Alert Triage keys its duplicate-suppression gate on this value.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -918,7 +918,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000015
       version: -1
       name: Set risk_level
-      description: 'data.risk_level from resources[type="item"] (296/296) or resources[type="mcp"] (21/21). Same mutually-exclusive coalesce as package_name. Vocabulary matches Koi.Inventory.risk_level: low / medium / high / critical / pending. This is KOI''s risk at the moment the alert fired; the org inventory record read by KOI Ext - Investigate Item may differ.'
+      description: 'data.risk_level from resources[type="item"] (296/296) or resources[type="mcp"] (21/21). Same mutually-exclusive coalesce as package_name. Vocabulary matches Koi.Inventory.risk_level: low / medium / high / critical / pending. This is KOI''s risk at the moment the alert fired; the org inventory record read by KOI Ext IR - Investigate Item may differ.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1231,7 +1231,7 @@ tasks:
       id: koixac00-0000-4000-8000-000000000024
       version: -1
       name: Set marketplace (API-safe)
-      description: 'Maps KoiContext.marketplace_raw - the value the EVENT carried - onto the vocabulary the KOI API accepts, by filtering the map on src and reading api. This is the one place in the chain where an event-derived marketplace is translated; KOI Ext - Alert Triage, Investigate Item, Enrich Item and Block and Remediate all consume the mapped value. An unmapped value (ollama, built_in, side_loaded, or anything KOI adds later) yields EMPTY on purpose - the downstream playbooks re-resolve an empty marketplace from koi-inventory-list(item_id) into Koi.Inventory.marketplace, whereas a wrong value is a hard HTTP 400. Live coverage on alert payloads: npm 293 of 296 (identity row), chrome 3 of 296 (becomes chrome_web_store), absent on all 21 mcp_server alerts and therefore on 100% of current ingestion. The comparison is case-sensitive; all 20 marketplace values seen in koi_koi_raw over 90 days are lower case.'
+      description: 'Maps KoiContext.marketplace_raw - the value the EVENT carried - onto the vocabulary the KOI API accepts, by filtering the map on src and reading api. This is the one place in the chain where an event-derived marketplace is translated; KOI Ext IR - Alert Triage, Investigate Item, Enrich Item and Block and Remediate all consume the mapped value. An unmapped value (ollama, built_in, side_loaded, or anything KOI adds later) yields EMPTY on purpose - the downstream playbooks re-resolve an empty marketplace from koi-inventory-list(item_id) into Koi.Inventory.marketplace, whereas a wrong value is a hard HTTP 400. Live coverage on alert payloads: npm 293 of 296 (identity row), chrome 3 of 296 (becomes chrome_web_store), absent on all 21 mcp_server alerts and therefore on 100% of current ingestion. The comparison is case-sensitive; all 20 marketplace values seen in koi_koi_raw over 90 days are lower case.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -1305,7 +1305,7 @@ inputs:
   value:
     simple: ${alert.metadata}
   required: false
-  description: 'The alert''s metadata object, as a JSON STRING. Defaults to the alert field of the same name. This is where notification_event_id lives - the only per-occurrence alert identity KOI supplies - so if your correlation rule does not surface a metadata field, repoint this input at whatever field carries the notification id. Leaving it unresolved is safe but disables duplicate suppression in KOI Ext - Alert Triage.'
+  description: 'The alert''s metadata object, as a JSON STRING. Defaults to the alert field of the same name. This is where notification_event_id lives - the only per-occurrence alert identity KOI supplies - so if your correlation rule does not surface a metadata field, repoint this input at whatever field carries the notification id. Leaving it unresolved is safe but disables duplicate suppression in KOI Ext IR - Alert Triage.'
   playbookInputQuery: null
 outputs:
 - contextPath: KoiContext

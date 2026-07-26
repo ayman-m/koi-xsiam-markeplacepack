@@ -1,7 +1,7 @@
-id: KOI Ext - Investigate Item
+id: KOI Ext IR - Investigate Item
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Investigate Item
+name: KOI Ext IR - Investigate Item
 description: |-
   Sub-playbook. Comprehensive investigation of a KOI item, rebuilt from the command
   surface that actually exists. Gathers the organization's inventory record, endpoint and
@@ -58,7 +58,7 @@ description: |-
   are spelled the same in both, so an unmapped event value returns HTTP 400 from
   koi-inventory-item-endpoints-list. The marketplace INPUT of this playbook is therefore run
   through a static map before use. The map carries the 22 API values as identity rows, so it
-  is idempotent: a caller that already supplies an API value (KOI Ext - Alert Triage does) is
+  is idempotent: a caller that already supplies an API value (KOI Ext IR - Alert Triage does) is
   unaffected. Koi.Inventory.marketplace is a COMMAND output, is already API-canonical and is
   never re-mapped. An unrecognised value becomes EMPTY, which routes to the inventory fallback.
 
@@ -155,7 +155,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000002
       version: -1
       name: Coerce marketplace to scalar (verbatim)
-      description: As above, and kept VERBATIM - the vocabulary mapping happens in tasks 31-33. May legitimately be empty - marketplace is an OPTIONAL filter on koi-inventory-list, and KOI Ext - Extract Alert Context cannot supply it on MCP alerts.
+      description: As above, and kept VERBATIM - the vocabulary mapping happens in tasks 31-33. May legitimately be empty - marketplace is an OPTIONAL filter on koi-inventory-list, and KOI Ext IR - Extract Alert Context cannot supply it on MCP alerts.
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty
@@ -351,7 +351,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000028
       version: -1
       name: Is a usable marketplace known?
-      description: 'Tests the MAPPED value (Inv.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a REQUIRED argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext - Extract Alert Context had none to supply (item.marketplace is absent on all 21 mcp_server alerts, and no extension alert has arrived since 2026-07-09, so an EMPTY MARKETPLACE IS NOW THE COMMON CASE rather than the exception), or the value they supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to the org inventory record, whose Koi.Inventory.marketplace is a COMMAND output and is already API-canonical - it is used as-is and never re-mapped.'
+      description: 'Tests the MAPPED value (Inv.marketplace_in), not the caller''s raw input, so a value the KOI API would reject never reaches a command. marketplace is a REQUIRED argument on koi-inventory-item-endpoints-list. It is empty here in three cases: the caller supplied none, KOI Ext IR - Extract Alert Context had none to supply (item.marketplace is absent on all 21 mcp_server alerts, and no extension alert has arrived since 2026-07-09, so an EMPTY MARKETPLACE IS NOW THE COMMON CASE rather than the exception), or the value they supplied has no API equivalent (ollama, built_in, side_loaded). All three fall back to the org inventory record, whose Koi.Inventory.marketplace is a COMMAND output and is already API-canonical - it is used as-is and never re-mapped.'
       iscommand: false
       brand: ''
       type: condition
@@ -1350,7 +1350,7 @@ tasks:
       id: koixiv00-0000-4000-8000-000000000033
       version: -1
       name: Normalize marketplace to the API vocabulary
-      description: 'Normalizes the caller-supplied marketplace onto the KOI API vocabulary. The value can reach this playbook from three kinds of source and the task is correct for all three. (a) EVENT-DERIVED - a caller that read marketplace out of a koi_koi_raw row (KOI Ext - Extract Alert Context, or any audit-driven playbook written against this pack) supplies a SHORT form such as software_windows or chrome, which every KOI item command rejects with HTTP 400; this task translates it. (b) ALREADY IN API FORM - KOI Ext - Alert Triage passes a value it has already resolved; the map identity rows pass it through unchanged, so running it through here a second time is a no-op, not a double-mapping bug. (c) COMMAND-DERIVED - Koi.Inventory.marketplace is already API-canonical and is NEVER sent through this task; the fallback branch below reads it directly, because allow-listing a command output against a static table would silently drop a marketplace KOI adds to the API later. A value with no row becomes EMPTY, which routes to that same inventory fallback.'
+      description: 'Normalizes the caller-supplied marketplace onto the KOI API vocabulary. The value can reach this playbook from three kinds of source and the task is correct for all three. (a) EVENT-DERIVED - a caller that read marketplace out of a koi_koi_raw row (KOI Ext IR - Extract Alert Context, or any audit-driven playbook written against this pack) supplies a SHORT form such as software_windows or chrome, which every KOI item command rejects with HTTP 400; this task translates it. (b) ALREADY IN API FORM - KOI Ext IR - Alert Triage passes a value it has already resolved; the map identity rows pass it through unchanged, so running it through here a second time is a no-op, not a double-mapping bug. (c) COMMAND-DERIVED - Koi.Inventory.marketplace is already API-canonical and is NEVER sent through this task; the fallback branch below reads it directly, because allow-listing a command output against a static table would silently drop a marketplace KOI adds to the API later. A value with no row becomes EMPTY, which routes to that same inventory fallback.'
       iscommand: false
       brand: ''
       script: SetAndHandleEmpty

@@ -133,7 +133,7 @@ def build_type():
         "name": TYPE_NAME,
         "prevName": TYPE_NAME,
         "color": "#5CD1B3",
-        "playbookId": "KOI Ext - Alert Triage",
+        "playbookId": "KOI Ext IR - Alert Triage",
         "hours": 0,
         "days": 0,
         "weeks": 0,
@@ -227,7 +227,7 @@ def main():
     build_type()
     build_layout()
     print("wrote %d incident fields, 1 incident type, 1 layoutscontainer" % n)
-    print("type: %r -> playbook 'KOI Ext - Alert Triage', layout %r" % (TYPE_NAME, TYPE_NAME))
+    print("type: %r -> playbook 'KOI Ext IR - Alert Triage', layout %r" % (TYPE_NAME, TYPE_NAME))
 
 
 if __name__ == "__main__":

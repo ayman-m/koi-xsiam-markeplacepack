@@ -1531,7 +1531,7 @@ _Parameters:_ item_key / item_name — pass KoiContext.item_id (from the alert's
 
 
 ```sql
-// KOI Ext - Investigate Item, step "KOI event history" (runs beside koi-inventory-item-get)
+// KOI Ext IR - Investigate Item, step "KOI event history" (runs beside koi-inventory-item-get)
 // PARAM: item_key   = KoiContext.item_id  (alert) or Koi.Inventory.item_id
 // PARAM: item_name  = Koi.Inventory.name  (pass the same value twice if you only have one)
 // Marketplace pack 1.2.3 has no history command - this is the only way to get an item timeline.
@@ -1568,7 +1568,7 @@ _Parameters:_ Same item_key / item_name as D1. Worked example: "octocat/Hello-Wo
 
 
 ```sql
-// KOI Ext - Investigate Item, war-room summary block. Same PARAMs as D1.
+// KOI Ext IR - Investigate Item, war-room summary block. Same PARAMs as D1.
 dataset = koi_koi_raw
 | filter source_log_type = "Audit" and type in ("extensions", "remediation")
 | filter object_id = "octocat/Hello-World" or object_name = "octocat/Hello-World"   // PARAM
@@ -1604,7 +1604,7 @@ _Parameters:_ item_token — a distinctive lowercase substring of the item (pack
 
 
 ```sql
-// KOI Ext - Investigate Item, new step "XDR runtime evidence".
+// KOI Ext IR - Investigate Item, new step "XDR runtime evidence".
 // Bridges "KOI says it is installed" to "it actually ran / was written to disk".
 // PARAM: item_token  = a distinctive substring of the item - package name, extension id, repo name.
 //                      From KoiContext.package_name / item_id, lowercased.
@@ -1640,11 +1640,11 @@ _False positives:_ Substring matching is blunt. Short or generic tokens ("pip", 
 Given a host, what is currently on it, broken down by marketplace and platform?
 
 
-_Parameters:_ koi_host = inputs.hostname (KOI Ext - Investigate Device). Worked example: "win-workstation", 30d.
+_Parameters:_ koi_host = inputs.hostname (KOI Ext IR - Investigate Device). Worked example: "win-workstation", 30d.
 
 
 ```sql
-// KOI Ext - Investigate Device, step "supply-chain posture by marketplace".
+// KOI Ext IR - Investigate Device, step "supply-chain posture by marketplace".
 // dedup keeps only the LATEST audit row per item, so install/uninstall churn nets out.
 // PARAM: koi_host = inputs.hostname
 dataset = koi_koi_raw
@@ -1680,7 +1680,7 @@ _Parameters:_ koi_host = inputs.hostname. Lookback is set by the query timeframe
 
 
 ```sql
-// KOI Ext - Investigate Device, step "recent supply-chain changes on this device".
+// KOI Ext IR - Investigate Device, step "recent supply-chain changes on this device".
 // PARAM: koi_host  = inputs.hostname
 // PARAM: lookback  = set on the query timeframe (7d used in the worked example)
 dataset = koi_koi_raw
@@ -1716,7 +1716,7 @@ _Parameters:_ koi_host = inputs.hostname; delete the filter for a fleet-wide cov
 
 
 ```sql
-// KOI Ext - Investigate Device, step "when did KOI last actually scan this device?".
+// KOI Ext IR - Investigate Device, step "when did KOI last actually scan this device?".
 // KOI is run-on-demand on Windows: no resident agent, so absence of KOI events means
 // "no scan ran", not "nothing changed". The bundled interpreter under ...\Local\Koi\Python
 // makes the scan itself visible in XDR, which is the only way to tell the two apart.
@@ -1753,7 +1753,7 @@ _Parameters:_ koi_host — must be the same string in both lanes; KOI's hostname
 
 
 ```sql
-// KOI Ext - Alert Triage, war-room summary step "acquisition timeline for this host".
+// KOI Ext IR - Alert Triage, war-room summary step "acquisition timeline for this host".
 // Two lanes on one clock: what KOI says arrived, and which process was running when it did.
 // PARAM: koi_host = KoiContext.alert_hostname (must equal xdr_data.agent_hostname)
 // PARAM: window   = the query timeframe (24h in the worked example)
@@ -1803,7 +1803,7 @@ _Parameters:_ alert_host = KoiContext.alert_hostname (extracted from resources[t
 
 
 ```sql
-// KOI Ext - Alert Triage, step "what else happened around this alert".
+// KOI Ext IR - Alert Triage, step "what else happened around this alert".
 // The alert is deduped upstream on metadata.notification_event_id - this takes the ONE
 // surviving alert's host and time and rebuilds the hour either side of it.
 // PARAM: alert_host    = KoiContext.alert_hostname (resources[type=device].data.hostname)
@@ -1860,11 +1860,11 @@ _False positives:_ Still noisy in the XDR_EXECUTION lane by construction — the
 Which hosts have this item, and has it already been remediated or listed by policy?
 
 
-_Parameters:_ item_key / item_name = inputs.item_id from KOI Ext - Block and Remediate. Worked example: "anthropic.claude-code", 30d.
+_Parameters:_ item_key / item_name = inputs.item_id from KOI Ext IR - Block and Remediate. Worked example: "anthropic.claude-code", 30d.
 
 
 ```sql
-// KOI Ext - Block and Remediate, pre-block step "who else has this item, and is it already handled".
+// KOI Ext IR - Block and Remediate, pre-block step "who else has this item, and is it already handled".
 // PARAM: item_key  = inputs.item_id
 // PARAM: item_name = the display name (pass item_id twice if that is all you have)
 dataset = koi_koi_raw
@@ -1906,7 +1906,7 @@ _Parameters:_ None — fleet-wide as written. Add `| filter alert_host = "<hostn
 
 
 ```sql
-// KOI Ext - MCP Server Audit, step "MCP servers currently alerting, one row per real alert".
+// KOI Ext Hunting - MCP Server Audit, step "MCP servers currently alerting, one row per real alert".
 // Alerts are re-sent on every 1-minute fetch (~245x). dedup on metadata.notification_event_id
 // is MANDATORY - count() over raw rows is meaningless.
 // PARAM: none (fleet-wide). Add `| filter alert_host = "<host>"` for the per-device variant.
@@ -1958,7 +1958,7 @@ _Parameters:_ koi_host = alert_host from D7; the filter is omitted below so the 
 
 
 ```sql
-// KOI Ext - MCP Server Audit, step "is this MCP server actually running here".
+// KOI Ext Hunting - MCP Server Audit, step "is this MCP server actually running here".
 // KOI reports MCP servers from configuration files; only XDR proves one executed.
 // Matches the standard MCP launch shapes rather than the bare token "mcp", which also
 // matches any analyst tooling that happens to mention it.
@@ -1997,11 +1997,11 @@ _False positives:_ Substantial, and demonstrated above: any command line mention
 Which version of this item is on each host right now, and is it still there at all?
 
 
-_Parameters:_ item_key / item_name = inputs.item_id (KOI Ext - Investigate Item / Enrich Item). Worked example: "anthropic.claude-code", 30d.
+_Parameters:_ item_key / item_name = inputs.item_id (KOI Ext IR - Investigate Item / Enrich Item). Worked example: "anthropic.claude-code", 30d.
 
 
 ```sql
-// KOI Ext - Investigate Item / Enrich Item, step "which version is where right now".
+// KOI Ext IR - Investigate Item / Enrich Item, step "which version is where right now".
 // dedup keeps the newest audit row per host, so this is CURRENT state, not history.
 // PARAM: item_key / item_name = inputs.item_id (pass twice if that is all you have)
 dataset = koi_koi_raw

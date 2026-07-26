@@ -1,12 +1,12 @@
-id: KOI Ext - Investigate Device
+id: KOI Ext IR - Investigate Device
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Investigate Device
+name: KOI Ext IR - Investigate Device
 description: |-
   Device posture check for the Marketplace KOI pack (Koi, v1.2.3 — 13 commands, integration only).
   Given a device_id, lists everything KOI sees installed on that device, flags the items whose
   risk_level is in risk_levels (default high,critical), and posts a posture summary plus a
-  risky-items table. Reusable from KOI Ext - Alert Triage or standalone. Best-effort: every
+  risky-items table. Reusable from KOI Ext IR - Alert Triage or standalone. Best-effort: every
   command task is continue-on-error.
 
   THERE IS NO DEVICE OBJECT IN THIS PACK. The Marketplace pack ships no koi-devices-list,

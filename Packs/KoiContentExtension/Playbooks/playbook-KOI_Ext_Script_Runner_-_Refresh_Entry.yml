@@ -1,6 +1,6 @@
-id: KOI Ext - Unified Refresh Entry
+id: KOI Ext Script Runner - Refresh Entry
 version: -1
-name: KOI Ext - Unified Refresh Entry
+name: KOI Ext Script Runner - Refresh Entry
 description: "Refreshes the scan tracker for a single Koi Script Runner configuration entry: enumerates the entry's endpoint group/OS and upserts membership into the entry's tracker List via KoiScanTracker."
 starttaskid: '0'
 inputs:

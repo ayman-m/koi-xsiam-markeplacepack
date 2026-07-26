@@ -1,15 +1,15 @@
-id: KOI Ext - Hunt Match Investigation
+id: KOI Ext Hunting - Hunt Match Investigation
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Hunt Match Investigation
+name: KOI Ext Hunting - Hunt Match Investigation
 description: |-
-  Sub-playbook of KOI Ext - Hunt Sweep, for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands).
+  Sub-playbook of KOI Ext Hunting - Hunt Sweep, for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands).
 
   Takes ONE hunt match (the raw XQL row, passed whole as the `match` input, plus hunt_id, match_kind and known_bad) and returns one normalized KoiHunt.Matches verdict object. The whole row is passed and its fields are read here by coalesce, so the four hunts' differing column names (item_id / item_key / object_id; alert_host / agent_hostname / host_list; item_risk) are all handled in one place with no forEach column desync.
 
-  For an ITEM match it runs KOI Ext - Investigate Item (org risk, endpoint/blast radius, and blocklist/allowlist governance via koi-inventory-list / koi-inventory-item-endpoints-list / koi-blocklist-get / koi-allowlist-get). For a HOST/shadow match (H4.2) it gathers host context with the Cortex-native core-get-endpoints and RECOMMENDS - never auto-runs - a core-script-run of the KOI deployment script to refresh a stale host.
+  For an ITEM match it runs KOI Ext IR - Investigate Item (org risk, endpoint/blast radius, and blocklist/allowlist governance via koi-inventory-list / koi-inventory-item-endpoints-list / koi-blocklist-get / koi-allowlist-get). For a HOST/shadow match (H4.2) it gathers host context with the Cortex-native core-get-endpoints and RECOMMENDS - never auto-runs - a core-script-run of the KOI deployment script to refresh a stale host.
 
-  MARKETPLACE VOCABULARY: the raw event `marketplace` is a SHORT form (software_windows, chrome, vsc). It is mapped to the API long form (windows, chrome_web_store, vscode) with the same table the parsing rule and KOI Ext - Investigate Item use, before it is handed to any koi- command. built_in / side_loaded / ollama have no API value and map to empty (unknown -> resolved from inventory). Every command task is continueonerror so one failed enrichment never aborts the sweep.
+  MARKETPLACE VOCABULARY: the raw event `marketplace` is a SHORT form (software_windows, chrome, vsc). It is mapped to the API long form (windows, chrome_web_store, vscode) with the same table the parsing rule and KOI Ext IR - Investigate Item use, before it is handed to any koi- command. built_in / side_loaded / ollama have no API value and map to empty (unknown -> resolved from inventory). Every command task is continueonerror so one failed enrichment never aborts the sweep.
 starttaskid: '0'
 tasks:
   '0':
@@ -478,7 +478,7 @@ tasks:
       brand: ''
       type: regular
       script: SetAndHandleEmpty
-      description: Same short->API marketplace table used by the parsing rule and KOI Ext - Investigate Item.
+      description: Same short->API marketplace table used by the parsing rule and KOI Ext IR - Investigate Item.
     separatecontext: false
     continueonerrortype: ''
     note: false
@@ -662,11 +662,11 @@ tasks:
     task:
       id: koihmi00-0000-4000-8000-000000000014
       version: -1
-      name: Investigate the item (KOI Ext - Investigate Item)
+      name: Investigate the item (KOI Ext IR - Investigate Item)
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Investigate Item
+      playbookId: KOI Ext IR - Investigate Item
       description: 'Full KOI investigation of the item: org inventory record (org risk, endpoint/blast radius, findings) and blocklist/allowlist governance. Reuses the existing sub-playbook rather than duplicating enrichment. continueonerror so an inventory miss never aborts the sweep.'
     separatecontext: false
     continueonerrortype: ''
@@ -1008,7 +1008,7 @@ tasks:
       key:
         simple: KoiHunt.Matches.recommendation
       value:
-        simple: 'Governance: ${KoiHunt.Matches.governed}. If ungoverned AND known-bad, this match is routed to KOI Ext - Block and Remediate with auto_block=false (analyst approval required).'
+        simple: 'Governance: ${KoiHunt.Matches.governed}. If ungoverned AND known-bad, this match is routed to KOI Ext IR - Block and Remediate with auto_block=false (analyst approval required).'
       append:
         simple: 'false'
     nexttasks:
@@ -1316,7 +1316,7 @@ inputs:
   value:
     simple: 7 days
   required: false
-  description: Time frame for the optional XDR runtime-evidence XQL inside KOI Ext - Investigate Item.
+  description: Time frame for the optional XDR runtime-evidence XQL inside KOI Ext IR - Investigate Item.
   playbookInputQuery: null
 outputs:
 - contextPath: KoiHunt.Matches

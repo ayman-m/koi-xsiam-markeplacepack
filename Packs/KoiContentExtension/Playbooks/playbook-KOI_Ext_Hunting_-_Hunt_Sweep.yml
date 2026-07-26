@@ -1,9 +1,9 @@
-id: KOI Ext - Hunt Sweep
+id: KOI Ext Hunting - Hunt Sweep
 version: -1
 fromversion: 6.10.0
-name: KOI Ext - Hunt Sweep
+name: KOI Ext Hunting - Hunt Sweep
 description: |-
-  JOB-ATTACHABLE playbook for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands). Attach it to a time-triggered Cortex Job (Investigation & Response > Jobs) - it is triggered by a JOB ON A SCHEDULE, NOT by a correlation rule. Like KOI Ext - Unified Script Runner it closes its own investigation at the end of every run.
+  JOB-ATTACHABLE playbook for the KOI Content Extension pack (extends the Marketplace KOI pack v1.2.3, integration id "KOI", 13 commands). Attach it to a time-triggered Cortex Job (Investigation & Response > Jobs) - it is triggered by a JOB ON A SCHEDULE, NOT by a correlation rule. Like KOI Ext Script Runner - Scan Job it closes its own investigation at the end of every run.
 
   WHAT IT DOES:
   1. Runs a configurable SET of validated, cheap, high-signal hunting XQL queries in parallel via xdr-xql-generic-query (bodies embedded verbatim, parameterised only by xql_time_frame):
@@ -14,9 +14,9 @@ description: |-
      The set is chosen by the hunt_set input (no playbook edit needed); default is the four above.
   2. Normalizes every match into a single KoiHunt.Matches array (via the sub-playbook), mapping the raw short-form marketplace to the API vocabulary.
   3. Gates on matches: zero -> posts 'hunt sweep clean' and closes.
-  4. Investigates each match (bounded fan-out): item matches via KOI Ext - Investigate Item; host/shadow matches via Cortex core-get-endpoints, surfacing (never running) core-script-run to refresh a stale host.
+  4. Investigates each match (bounded fan-out): item matches via KOI Ext IR - Investigate Item; host/shadow matches via Cortex core-get-endpoints, surfacing (never running) core-script-run to refresh a stale host.
   5. Posts ONE war-room markdown table of every match with its verdict.
-  6. ANALYST-GATED response (never automatic): a confirmed known-bad, ungoverned item is routed to KOI Ext - Block and Remediate with auto_block=false, so the blocklist write requires human approval. A scheduled hunt NEVER auto-blocks.
+  6. ANALYST-GATED response (never automatic): a confirmed known-bad, ungoverned item is routed to KOI Ext IR - Block and Remediate with auto_block=false, so the blocklist write requires human approval. A scheduled hunt NEVER auto-blocks.
   7. Closes the investigation.
 
   DEPENDENCY: this playbook's PURPOSE is running XQL, so the Cortex XDR - XQL Query Engine (xdr-xql-generic-query) is effectively REQUIRED for it - but the pack does not hard-depend on it. Every XQL task is continueonerror and the playbook fails gracefully: if the engine is absent it posts 'XQL engine unavailable - hunt sweep skipped' and closes.
@@ -917,8 +917,8 @@ tasks:
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Hunt Match Investigation
-      description: For every H2.1 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+      playbookId: KOI Ext Hunting - Hunt Match Investigation
+      description: For every H2.1 match, runs KOI Ext Hunting - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
     separatecontext: true
     continueonerrortype: ''
     note: false
@@ -972,8 +972,8 @@ tasks:
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Hunt Match Investigation
-      description: For every H2.6 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+      playbookId: KOI Ext Hunting - Hunt Match Investigation
+      description: For every H2.6 match, runs KOI Ext Hunting - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
     separatecontext: true
     continueonerrortype: ''
     note: false
@@ -1027,8 +1027,8 @@ tasks:
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Hunt Match Investigation
-      description: For every H1.3 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+      playbookId: KOI Ext Hunting - Hunt Match Investigation
+      description: For every H1.3 match, runs KOI Ext Hunting - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
     separatecontext: true
     continueonerrortype: ''
     note: false
@@ -1082,8 +1082,8 @@ tasks:
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Hunt Match Investigation
-      description: For every H4.2 match, runs KOI Ext - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
+      playbookId: KOI Ext Hunting - Hunt Match Investigation
+      description: For every H4.2 match, runs KOI Ext Hunting - Hunt Match Investigation (forEach), which normalizes the row, investigates it, and appends one KoiHunt.Matches verdict object. max caps fan-out per hunt (safety for a scheduled sweep).
     separatecontext: true
     continueonerrortype: ''
     note: false
@@ -1150,9 +1150,9 @@ tasks:
     isautoswitchedtoquietmode: false
     scriptarguments:
       value:
-        simple: '## KOI Ext - Hunt Sweep summary
+        simple: '## KOI Ext Hunting - Hunt Sweep summary
 
-          Every hunt match below carries its investigation verdict (org risk, blast radius, governance) and a recommended action. Confirmed known-bad, ungoverned items are routed to KOI Ext - Block and Remediate with analyst approval required (auto_block=false) - a scheduled sweep never auto-blocks.'
+          Every hunt match below carries its investigation verdict (org risk, blast radius, governance) and a recommended action. Confirmed known-bad, ungoverned items are routed to KOI Ext IR - Block and Remediate with analyst approval required (auto_block=false) - a scheduled sweep never auto-blocks.'
     nexttasks:
       '#none#':
       - '26'
@@ -1502,12 +1502,12 @@ tasks:
     task:
       id: koihsw00-0000-4000-8000-000000000034
       version: -1
-      name: Analyst-gated block (KOI Ext - Block and Remediate)
+      name: Analyst-gated block (KOI Ext IR - Block and Remediate)
       iscommand: false
       brand: ''
       type: playbook
-      playbookId: KOI Ext - Block and Remediate
-      description: 'For each route candidate, runs KOI Ext - Block and Remediate with auto_block=false: it re-investigates, short-circuits if already blocked, and presents the analyst approval gate; the blocklist write fires ONLY on approval. This gate is a governance control - a scheduled sweep must never auto-block, so auto_block is hard-wired false here.'
+      playbookId: KOI Ext IR - Block and Remediate
+      description: 'For each route candidate, runs KOI Ext IR - Block and Remediate with auto_block=false: it re-investigates, short-circuits if already blocked, and presents the analyst approval gate; the blocklist write fires ONLY on approval. This gate is a governance control - a scheduled sweep must never auto-block, so auto_block is hard-wired false here.'
     separatecontext: true
     continueonerrortype: ''
     note: false
@@ -1577,7 +1577,7 @@ tasks:
     isautoswitchedtoquietmode: false
     scriptarguments:
       value:
-        simple: 'KOI Ext - Hunt Sweep: no ungoverned known-bad matches met the routing criteria (min_risk=${inputs.min_risk}); nothing routed to response.'
+        simple: 'KOI Ext Hunting - Hunt Sweep: no ungoverned known-bad matches met the routing criteria (min_risk=${inputs.min_risk}); nothing routed to response.'
     nexttasks:
       '#none#':
       - '50'
@@ -1773,7 +1773,7 @@ tasks:
     isautoswitchedtoquietmode: false
     scriptarguments:
       value:
-        simple: '## KOI Ext - Hunt Sweep - matches found (auto-investigation disabled)
+        simple: '## KOI Ext Hunting - Hunt Sweep - matches found (auto-investigation disabled)
 
           The hunts returned matches but auto_investigate=false, so they were not investigated or routed. Raw rows:'
     nexttasks:
@@ -1850,7 +1850,7 @@ tasks:
     isautoswitchedtoquietmode: false
     scriptarguments:
       value:
-        simple: '## KOI Ext - Hunt Sweep
+        simple: '## KOI Ext Hunting - Hunt Sweep
 
           **XQL engine unavailable - hunt sweep skipped.** No xdr-xql-generic-query result was produced, so the Cortex XDR - XQL Query Engine is not installed/enabled on this tenant (or hunt_set selected no hunts). Install the engine to run the scheduled hunt sweep.'
     nexttasks:
@@ -1888,7 +1888,7 @@ tasks:
     isautoswitchedtoquietmode: false
     scriptarguments:
       value:
-        simple: '## KOI Ext - Hunt Sweep
+        simple: '## KOI Ext Hunting - Hunt Sweep
 
           **Hunt sweep clean.** The selected hunts (${inputs.hunt_set}) ran over ${inputs.xql_time_frame} and returned no matches.'
     nexttasks:
@@ -1986,7 +1986,7 @@ inputs:
   value:
     simple: high
   required: false
-  description: 'Minimum item risk level eligible for the analyst-gated response route: critical, high (default), medium or low. Matches below this level are still investigated and summarized, but not routed to KOI Ext - Block and Remediate.'
+  description: 'Minimum item risk level eligible for the analyst-gated response route: critical, high (default), medium or low. Matches below this level are still investigated and summarized, but not routed to KOI Ext IR - Block and Remediate.'
   playbookInputQuery: null
 - key: xql_time_frame
   value:
@@ -2010,7 +2010,7 @@ inputs:
   value:
     simple: 'true'
   required: false
-  description: true (default) routes confirmed known-bad, ungoverned matches to the analyst-gated KOI Ext - Block and Remediate (auto_block=false); false summarizes only.
+  description: true (default) routes confirmed known-bad, ungoverned matches to the analyst-gated KOI Ext IR - Block and Remediate (auto_block=false); false summarizes only.
   playbookInputQuery: null
 - key: instance_name
   value: {}

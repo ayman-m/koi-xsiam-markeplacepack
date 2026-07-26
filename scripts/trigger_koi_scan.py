@@ -4,7 +4,7 @@
 Why this exists: KOI has **no resident agent on Windows** — it is run-on-demand,
 so inventory is only reported when the KOI deployment script actually executes.
 Both test hosts stopped producing events on 15 July for exactly that reason.
-This is the same mechanism the ported "KOI Ext - Unified Script Runner" playbook
+This is the same mechanism the ported "KOI Ext Script Runner - Scan Job" playbook
 uses (resolve script by name -> uid, then run it on a target endpoint); doing it
 over the XDR API here because integration commands cannot be executed on this
 tenant (see VERIFIED_FACTS.md section 6).

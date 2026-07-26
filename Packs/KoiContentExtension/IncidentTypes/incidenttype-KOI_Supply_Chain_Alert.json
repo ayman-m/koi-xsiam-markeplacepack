@@ -5,7 +5,7 @@
     "name": "KOI Supply Chain Alert",
     "prevName": "KOI Supply Chain Alert",
     "color": "#5CD1B3",
-    "playbookId": "KOI Ext - Alert Triage",
+    "playbookId": "KOI Ext IR - Alert Triage",
     "hours": 0,
     "days": 0,
     "weeks": 0,

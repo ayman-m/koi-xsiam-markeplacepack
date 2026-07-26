@@ -79,7 +79,7 @@ engine present. On the Cortex **platform** the same `xdr-xql-generic-query` comm
 already-mandatory `Core` pack; on **marketplacev2** it is the standalone `CortexXDR` pack — which is
 why `CortexXDR` is the id declared optional.
 
-`KOI Ext - Unified Process Config Entry` sends mail with the generic `send-mail` command, provided
+`KOI Ext Script Runner - Process Config Entry` sends mail with the generic `send-mail` command, provided
 by whichever mail-sender integration you install (`Mail Sender (New)`, `Gmail`, `Microsoft Graph
 Mail`, EWS, …) and selected per config entry. No mail pack is declared, because declaring one
 arbitrarily would force an unwanted install.
@@ -136,31 +136,31 @@ Grouped by role. Each is one line of purpose; the flows are drawn in §3 and §4
 
 | Playbook | Purpose |
 |---|---|
-| `KOI Ext - Alert Triage` | Top-level entry point: build context, score four signals, reach a verdict, then auto-close (Benign) or hand off to an analyst-gated response |
-| `KOI Ext - Extract Alert Context` | Sub-playbook: parse the alert's OCSF `finding_info` / `observables` / `resources` into the flat `KoiContext.*` object; publish `notification_id` for dedupe and both raw + API-safe marketplace |
-| `KOI Ext - Investigate Item` | Sub-playbook: full investigation of one inventory item — org risk, endpoints/blast radius, allowlist/blocklist standing |
-| `KOI Ext - Investigate Device` | Device posture as an inventory query filtered by `device_id` (there is no device API — item-centric by necessity) |
-| `KOI Ext - Enrich Item` | Sub-playbook: lightweight reusable enrichment (inventory record + endpoints); a trimmed alternative to Investigate Item |
+| `KOI Ext IR - Alert Triage` | Top-level entry point: build context, score four signals, reach a verdict, then auto-close (Benign) or hand off to an analyst-gated response |
+| `KOI Ext IR - Extract Alert Context` | Sub-playbook: parse the alert's OCSF `finding_info` / `observables` / `resources` into the flat `KoiContext.*` object; publish `notification_id` for dedupe and both raw + API-safe marketplace |
+| `KOI Ext IR - Investigate Item` | Sub-playbook: full investigation of one inventory item — org risk, endpoints/blast radius, allowlist/blocklist standing |
+| `KOI Ext IR - Investigate Device` | Device posture as an inventory query filtered by `device_id` (there is no device API — item-centric by necessity) |
+| `KOI Ext IR - Enrich Item` | Sub-playbook: lightweight reusable enrichment (inventory record + endpoints); a trimmed alternative to Investigate Item |
 
 **Response**
 
 | Playbook | Purpose |
 |---|---|
-| `KOI Ext - Block and Remediate` | Re-check the item, recover its `marketplace`, present an analyst approval gate, and — only on approval — add it to the org blocklist with `koi-blocklist-items-add` |
+| `KOI Ext IR - Block and Remediate` | Re-check the item, recover its `marketplace`, present an analyst approval gate, and — only on approval — add it to the org blocklist with `koi-blocklist-items-add` |
 
 **Standalone audit**
 
 | Playbook | Purpose |
 |---|---|
-| `KOI Ext - MCP Server Audit` | Standalone/scheduled audit of MCP servers in inventory (`koi-inventory-list view=mcp_servers`), reporting risky ones |
+| `KOI Ext Hunting - MCP Server Audit` | Standalone/scheduled audit of MCP servers in inventory (`koi-inventory-list view=mcp_servers`), reporting risky ones |
 
 **Script Runner trio — additional content, calls no KOI command**
 
 | Playbook | Purpose |
 |---|---|
-| `KOI Ext - Unified Script Runner` | Read a Script Runner configuration list and dispatch each entry |
-| `KOI Ext - Unified Process Config Entry` | Sub-playbook: validate one config entry, run it, mail the result |
-| `KOI Ext - Unified Execute Endpoint Script` | Sub-playbook: resolve script + target endpoints, run, poll for the result |
+| `KOI Ext Script Runner - Scan Job` | Read a Script Runner configuration list and dispatch each entry |
+| `KOI Ext Script Runner - Process Config Entry` | Sub-playbook: validate one config entry, run it, mail the result |
+| `KOI Ext Script Runner - Execute Endpoint Script` | Sub-playbook: resolve script + target endpoints, run, poll for the result |
 
 > The three `Unified *` playbooks are **additional content, not part of the Marketplace KOI pack.**
 > They call **no KOI command at all** — only the Cortex-native `core-get-scripts`, `core-get-endpoints`
@@ -171,8 +171,8 @@ Grouped by role. Each is one line of purpose; the flows are drawn in §3 and §4
 
 | Playbook | Purpose |
 |---|---|
-| `KOI Ext - Hunt Sweep` | Job-attached, time-triggered proactive hunt: run a configurable set of validated hunting XQL queries, investigate every match, post a war-room table, and route confirmed ungoverned known-bad to an analyst-gated block |
-| `KOI Ext - Hunt Match Investigation` | Sub-playbook of Hunt Sweep: normalize one hunt match and return its verdict, reusing Investigate Item for items and `core-get-endpoints` for host/shadow matches |
+| `KOI Ext Hunting - Hunt Sweep` | Job-attached, time-triggered proactive hunt: run a configurable set of validated hunting XQL queries, investigate every match, post a war-room table, and route confirmed ungoverned known-bad to an analyst-gated block |
+| `KOI Ext Hunting - Hunt Match Investigation` | Sub-playbook of Hunt Sweep: normalize one hunt match and return its verdict, reusing Investigate Item for items and `core-get-endpoints` for host/shadow matches |
 
 ### 2.3 Dashboard
 
@@ -185,9 +185,9 @@ Grouped by role. Each is one line of purpose; the flows are drawn in §3 and §4
 ## 3. The investigation flow
 
 A KOI alert lands in `koi_koi_raw` (`source_log_type = "Alerts"`) and, via your correlation rule,
-drives `KOI Ext - Alert Triage`. Triage parses the alert, deduplicates, investigates the item (with
+drives `KOI Ext IR - Alert Triage`. Triage parses the alert, deduplicates, investigates the item (with
 optional Cortex XDR enrichment), reaches a verdict, and either auto-closes a Benign alert or routes
-a Malicious one to an **analyst-gated** `KOI Ext - Block and Remediate`. **The blocklist write is
+a Malicious one to an **analyst-gated** `KOI Ext IR - Block and Remediate`. **The blocklist write is
 reachable only through a human approval decision — never on an automatic edge**
 ([`../Packs/KoiContentExtension/Playbooks/playbook-KOI_Ext_-_Alert_Triage.yml`](../Packs/KoiContentExtension/Playbooks/playbook-KOI_Ext_-_Alert_Triage.yml),
 [`playbook-KOI_Ext_-_Block_and_Remediate.yml`](../Packs/KoiContentExtension/Playbooks/playbook-KOI_Ext_-_Block_and_Remediate.yml)).
@@ -195,16 +195,16 @@ reachable only through a human approval decision — never on an automatic edge*
 ```mermaid
 flowchart TB
     ALERT["KOI alert<br/>koi_koi_raw · source_log_type = Alerts"]
-    TRIAGE["KOI Ext - Alert Triage"]
-    EXTRACT["KOI Ext - Extract Alert Context<br/>parse OCSF payload · dedupe on notification_event_id<br/>map marketplace short-form to API long-form"]
+    TRIAGE["KOI Ext IR - Alert Triage"]
+    EXTRACT["KOI Ext IR - Extract Alert Context<br/>parse OCSF payload · dedupe on notification_event_id<br/>map marketplace short-form to API long-form"]
     DUP{"Duplicate<br/>notification?"}
     DUPCLOSE["Close as duplicate<br/>no investigation"]
-    ITEM["KOI Ext - Investigate Item<br/>org risk · blast radius · governance"]
+    ITEM["KOI Ext IR - Investigate Item<br/>org risk · blast radius · governance"]
     XDR["Optional Cortex XDR enrichment<br/>xdr-xql-generic-query · Theme D / D5<br/>continue-on-error · never feeds the verdict"]
     VERDICT{"Verdict?"}
     BENIGN["Auto-close<br/>Benign"]
     GATE{"Analyst approval<br/>gate"}
-    BLOCK["KOI Ext - Block and Remediate<br/>koi-blocklist-items-add"]
+    BLOCK["KOI Ext IR - Block and Remediate<br/>koi-blocklist-items-add"]
     NOWRITE["No blocklist write<br/>rejected / not approved"]
 
     ALERT --> TRIAGE --> EXTRACT --> DUP
@@ -240,7 +240,7 @@ Reading the flow:
   parallel lane. It is `continueonerror` and **never feeds the verdict, the analyst gate, or the
   auto-close**; if the XQL engine is absent the lane simply degrades.
 - **Verdict → response.** Benign auto-closes. Malicious opens the block gate **only when an
-  `item_id` is present**, then runs `KOI Ext - Block and Remediate` with `auto_block` forced
+  `item_id` is present**, then runs `KOI Ext IR - Block and Remediate` with `auto_block` forced
   `false`. Inside that playbook the write to `koi-blocklist-items-add` sits behind a hard analyst
   approval decision — the blocklist write can never fire without explicit approval.
 
@@ -248,17 +248,17 @@ Reading the flow:
 
 ## 4. The scheduled hunt sweep
 
-`KOI Ext - Hunt Sweep` runs the pack's proactive hunts **on a schedule**, investigates matches, and
+`KOI Ext Hunting - Hunt Sweep` runs the pack's proactive hunts **on a schedule**, investigates matches, and
 posts a war-room summary. It is triggered by a **time-triggered Cortex Job, not by a correlation
 rule** — the deliberate design for this pack. KOI is run-on-demand (there is no resident agent), so a
-scheduled Job is the hunt scheduler, exactly as it is for `KOI Ext - Unified Script Runner`. Each run
+scheduled Job is the hunt scheduler, exactly as it is for `KOI Ext Script Runner - Scan Job`. Each run
 opens its own investigation and closes it, so the Jobs list stays clean and there is one summary per
 run.
 
 ```mermaid
 flowchart TB
     JOB["Cortex Job<br/>time-triggered · Investigation & Response → Jobs"]
-    SWEEP["KOI Ext - Hunt Sweep"]
+    SWEEP["KOI Ext Hunting - Hunt Sweep"]
     ENGINE{"XQL Query Engine<br/>present?"}
     SKIP["Post 'XQL engine unavailable —<br/>hunt sweep skipped' · close"]
 
@@ -272,10 +272,10 @@ flowchart TB
     NORM["Collect + normalise matches<br/>KoiHunt.Matches · map short-form marketplace to API"]
     ANY{"Any<br/>matches?"}
     CLEAN["Post 'hunt sweep clean' · close"]
-    INV["Per match: KOI Ext - Hunt Match Investigation<br/>items → Investigate Item<br/>host/shadow → core-get-endpoints"]
+    INV["Per match: KOI Ext Hunting - Hunt Match Investigation<br/>items → Investigate Item<br/>host/shadow → core-get-endpoints"]
     TABLE["War-room summary table"]
     GATE{"Analyst approval<br/>gate"}
-    BLOCK["KOI Ext - Block and Remediate<br/>auto_block = false"]
+    BLOCK["KOI Ext IR - Block and Remediate<br/>auto_block = false"]
     CLOSE["Close investigation"]
 
     JOB --> SWEEP --> ENGINE
@@ -305,12 +305,12 @@ short-form marketplace mapped to API form before any `koi-*` command sees it. **
 sweep clean" and close.** Otherwise each match is investigated (item matches via Investigate Item;
 host/shadow matches via `core-get-endpoints`, which *recommends* — never runs — a `core-script-run`
 of the KOI deployment script to refresh a stale host), the war-room table is posted, and a confirmed
-known-bad, ungoverned item that meets `min_risk` is routed to `KOI Ext - Block and Remediate` with
+known-bad, ungoverned item that meets `min_risk` is routed to `KOI Ext IR - Block and Remediate` with
 **`auto_block=false`**. The gate is hard-wired: **a scheduled sweep never auto-blocks.**
 
 ### 4.1 Attach it to a Job
 
-Mirror the way `KOI Ext - Unified Script Runner` is scheduled
+Mirror the way `KOI Ext Script Runner - Scan Job` is scheduled
 ([`../Packs/KoiContentExtension/README.md`](../Packs/KoiContentExtension/README.md), "Attach it to a
 Job"):
 
@@ -318,7 +318,7 @@ Job"):
 2. Choose **Scheduled** (time-triggered) and set the cadence — every 12 or 24 hours, or a cron such
    as daily at 02:00. **Do not** attach a feed or a triggering incident type; this is a time
    trigger, not an event trigger.
-3. Set the Job's **Playbook** to **`KOI Ext - Hunt Sweep`**.
+3. Set the Job's **Playbook** to **`KOI Ext Hunting - Hunt Sweep`**.
 4. (Optional) Override inputs on the Job — narrow `hunt_set`, lengthen `xql_time_frame`, or set
    `enable_response_gate=false` for a report-only cadence while you tune it.
 5. Ensure the **Cortex XDR - XQL Query Engine** integration is enabled and the **KOI** integration
@@ -339,7 +339,7 @@ Job"):
 ### 4.3 The XQL engine is effectively required for THIS playbook only
 
 Its whole purpose is running XQL, so unlike the optional enrichment on the investigation playbooks,
-`KOI Ext - Hunt Sweep` does nothing useful without `xdr-xql-generic-query`. It still **degrades
+`KOI Ext Hunting - Hunt Sweep` does nothing useful without `xdr-xql-generic-query`. It still **degrades
 gracefully**: every XQL task is `continueonerror`, and if the engine is absent the playbook posts
 *"XQL engine unavailable — hunt sweep skipped"* and closes. The pack as a whole does **not**
 hard-depend on the engine — the `CortexXDR` dependency stays `mandatory: false` (§1.3); only this one
