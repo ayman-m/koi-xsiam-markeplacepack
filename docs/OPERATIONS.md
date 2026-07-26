@@ -72,7 +72,7 @@ Declared in
 | `CommonScripts` | **mandatory** | `SetAndHandleEmpty`, `Set`, `Print`, `PrintErrorEntry`, `DeleteContext`, `GetErrorsFromEntry` |
 | `FiltersAndTransformers` | **mandatory** | `ParseJSON`, `JsonToTable`, `SetIfEmpty`, `FormatTemplate`, `LastArrayElement` |
 | `Core` | **mandatory** | `Cortex Core - IR` — `core-get-scripts`, `core-get-endpoints`, `core-script-run` (the three `Unified *` playbooks and the host branch of the hunt sweep) |
-| `CortexXDR` | **optional** (`mandatory: false`) | The **Cortex XDR - XQL Query Engine** and its `xdr-xql-generic-query` command. Needed **only** for the best-effort XDR enrichment on three investigation playbooks and — in practice — for the hunt sweep, whose whole job is running XQL |
+| `CortexXDR` | **optional** (`mandatory: false`) | Supplies `xdr-xql-generic-query` on platforms that need it. **On Cortex XSIAM this is not required**: XSIAM is the XDR and auto-provisions the XQL Query Engine, whose default instance serves that command (verified on tenant 2026-07-26). The dependency stays declared and optional so the pack also installs cleanly elsewhere |
 
 `CortexXDR` stays optional so the pack installs and every KOI-command playbook works with no XQL
 engine present. On the Cortex **platform** the same `xdr-xql-generic-query` command ships in the

@@ -218,7 +218,7 @@ const testSlide = (kicker, title, needs, steps, expects, note) => {
   });
   card(s, M, 4.35, W, 1.5, CARD_HI);
   s.addText("Run them in order the first time", { x: M + 0.34, y: 4.55, w: 5.0, h: 0.3, fontSize: 13, bold: true, color: WHITE, fontFace: F, margin: 0, valign: "top" });
-  s.addText("Tests 1 to 3 prove data is arriving and correct. Tests 4 to 7 prove the automation. Tests 8 and 9 prove fleet script execution — the only ones needing the Core REST API integration. Test 10 is the alert layout.",
+  s.addText("Tests 1 to 3 prove data is arriving and correct. Tests 4 to 7 prove the automation. Tests 8 and 9 prove fleet script execution — the only ones needing the Core REST API integration. Test 10 is the alert layout. Nothing here needs a Cortex XDR integration: XSIAM is the XDR, and its XQL engine is built in.",
     { x: M + 0.34, y: 4.92, w: W - 0.68, h: 0.8, fontSize: 11, color: BODY, fontFace: F, margin: 0, lineSpacing: 14, valign: "top" });
   s.addText("A test that fails on a missing prerequisite is not a product defect — check the amber panel first.",
     { x: M, y: 6.15, w: W, h: 0.3, fontSize: 11, italic: true, color: AMBER, fontFace: F, margin: 0, valign: "top" });
@@ -237,10 +237,9 @@ const testSlide = (kicker, title, needs, steps, expects, note) => {
     ["KOI API key", "KOI console → Settings → API Access", "Tests 1-7, 10", CYAN],
     ["KOI integration instance", "Settings → Data Sources → Add → KOI", "Tests 1-7, 10", CYAN],
     ["An egress IP KOI accepts", "Run the instance on a Cortex engine if needed", "Tests 1-7, 10", AMBER],
-    ["Cortex XDR integration", "Settings → Data Sources → Cortex XDR", "Tests 5, 7 enrichment lanes", CYAN],
     ["Core REST API instance", "Settings → Data Sources → Add → Core REST API", "Tests 8-9 only", AMBER],
     ["KOI script in Action Center", "Action Center → Scripts Library → upload", "Tests 8-9", CYAN],
-    ["An endpoint group", "Endpoints → Endpoint Groups", "Tests 8-9", CYAN],
+    ["An endpoint group", "Endpoints → tag agents, then Endpoint Groups → dynamic", "Tests 8-9", CYAN],
     ['"Koi Script Runner" JSON List', "Settings → Object Setup → Lists", "Tests 8-9", CYAN],
   ];
   const rh = 0.40;
@@ -312,7 +311,7 @@ testSlide("Test 4", "Alert triage",
 testSlide("Test 5", "Item and device investigation",
   ["Test 1 passing",
    "An item id and its marketplace, and a hostname",
-   "Cortex XDR integration for the execution-evidence lanes (optional)"],
+   "Nothing else — the XQL engine XSIAM uses for execution evidence is built in"],
   ["Automation → Playbooks → KOI Ext IR - Investigate Item → Run.",
    "Supply item_id and marketplace.",
    "Repeat with KOI Ext IR - Investigate Device and a hostname."],
@@ -338,7 +337,7 @@ testSlide("Test 6", "Gated response",
 
 testSlide("Test 7", "Proactive hunting",
   ["Test 1 passing",
-   "Cortex XDR integration configured — the hunt sweep queries xdr_data"],
+   "Nothing else — the hunt sweep queries xdr_data, which XSIAM holds natively"],
   ["Automation → Playbooks → KOI Ext Hunting - MCP Server Audit → Run.",
    "Then run KOI Ext Hunting - Hunt Sweep.",
    "Optionally set hunt_set and min_risk.",
@@ -346,13 +345,13 @@ testSlide("Test 7", "Proactive hunting",
   ["The audit lists MCP servers at or above the threshold.",
    "The sweep runs its hunts and investigates what it finds.",
    "Block candidates are routed to an analyst gate, never blocked automatically."],
-  "Without a Cortex XDR integration the sweep reports that the XQL engine is unavailable and stops cleanly — that is a graceful skip, not a failure."
+  "The sweep checks the XQL engine is answering before it runs, and stops cleanly if not. On XSIAM the engine is provisioned by the platform, so that check should simply pass."
 );
 
 testSlide("Test 8", "Script Runner — refresh the tracker",
   ["Core REST API integration instance configured  ← the one people miss",
    "A KOI script in Action Center → Scripts Library (it must take no parameters)",
-   "An endpoint group containing your agents",
+   "An endpoint group — easiest is to tag the agents, then make a dynamic group on that tag",
    'A JSON List named exactly "Koi Script Runner"'],
   ["Settings → Object Setup → Lists → New List, type JSON, named Koi Script Runner.",
    "Give each entry a script name, endpoint_os, endpoint group, tracker_list and rescan_interval_hours.",
@@ -400,7 +399,7 @@ testSlide("Test 10", "Alert fields and layout",
     ["Promoted fields missing", "This extension not installed or not active", "Re-check the pack installed and events arrived after it"],
     ["Everything triages Suspicious", "The alert carried no KOI detail", "Check the correlation rule passes KOI fields through"],
     ["Alert fields empty", "Triage has not run on that alert", "Triage writes them — run it first"],
-    ["Hunt sweep skips immediately", "No Cortex XDR integration", "Expected. Configure Cortex XDR to enable the hunts"],
+    ["Hunt sweep skips immediately", "The XQL engine did not answer", "Re-run. XSIAM provisions the engine, so this should not persist"],
     ["Tracker List stays empty", "No Core REST API instance", "Configure it — Test 8 cannot pass without it"],
     ["A Job never fires", "It was created disabled", "Enable it and confirm a next-run time is shown"],
   ];
