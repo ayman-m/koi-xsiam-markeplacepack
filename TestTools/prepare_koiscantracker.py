@@ -18,6 +18,21 @@ that file has to be the unified YAML. The supported way to produce it is
 without the SDK installed is not blocked — the guide's whole premise is that testing
 needs no content development.
 
+Why not just call prepare-content
+---------------------------------
+Its output was diffed against this one: the metadata and the code are identical except
+that the SDK wraps the body in
+
+    register_module_line('KoiScanTracker', 'start', __line__())
+    ...
+    register_module_line('KoiScanTracker', 'end', __line__())
+
+`register_module_line` is defined in CommonServerPython, and the SDK only inlines that
+library into scripts that import it. KoiScanTracker deliberately does not — it is
+self-contained so it can be uploaded raw — so the SDK's own output would call a name
+that does not exist at runtime. Omitting those two lines is correct here, not drift.
+Re-run the diff before "fixing" this to match the SDK.
+
 Output: dist/automation-KoiScanTracker.yml — generated, never edited by hand.
 
 Usage:  python3 TestTools/prepare_koiscantracker.py [--check]
@@ -34,13 +49,36 @@ BANNER = ("# PREPARED FILE — do not edit. Generated from Scripts/KoiScanTracke
           "# by TestTools/prepare_koiscantracker.py. Edit the .py/.yml source instead.\n")
 
 
+class _Literal(str):
+    """Marks a string to be emitted as a YAML literal block (|), not a quoted scalar."""
+
+
+def _literal_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="|")
+
+
+yaml.add_representer(_Literal, _literal_representer)
+
+
 def build():
     meta = yaml.safe_load(open(os.path.join(SRC, "KoiScanTracker.yml")))
     code = open(os.path.join(SRC, "KoiScanTracker.py")).read()
     if meta.get("script") != "-":
         raise SystemExit("source yml should carry the '-' placeholder, not code")
-    meta["script"] = code
-    return BANNER + yaml.dump(meta, sort_keys=False, allow_unicode=True, width=10000)
+
+    # A literal block keeps the Python readable — real indented lines, exactly as in the
+    # .py, and the same shape demisto-sdk prepare-content emits. Quoted style would be
+    # equally valid YAML but collapses the whole script to one line of \n escapes, so
+    # anyone opening the file to check the code is there cannot tell that it is.
+    # PyYAML silently falls back to quoted style if any line has trailing whitespace,
+    # which would reintroduce exactly that, so strip it and prove the style afterwards.
+    code = "\n".join(line.rstrip() for line in code.splitlines()) + "\n"
+    meta["script"] = _Literal(code)
+
+    out = BANNER + yaml.dump(meta, sort_keys=False, allow_unicode=True, width=10000)
+    if "\nscript: |" not in out:
+        raise SystemExit("script was not emitted as a literal block — check for odd whitespace")
+    return out
 
 
 def main():

@@ -1,3 +1,11 @@
+# Source metadata only — the code lives beside this file in KoiScanTracker.py.
+# `script: '-'` below is the placeholder the official layout requires; it is not a
+# mistake and must stay. demisto-sdk joins the two on upload, so a pack install needs
+# nothing more.  https://xsoar.pan.dev/docs/integrations/package-dir
+#
+# Importing by hand through Automation -> Scripts -> Import instead? That takes ONE file
+# with the code already in it: use ../../dist/automation-KoiScanTracker.yml.
+# Do NOT upload this file for a manual import — it would land with an empty script.
 commonfields:
   id: KoiScanTracker
   version: -1
