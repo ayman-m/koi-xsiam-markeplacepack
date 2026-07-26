@@ -110,46 +110,63 @@ const estH = (items, usableIn) => {
   }, 0);
 };
 
-const testSlide = (kicker, title, needs, steps, expects, note) => {
+const testSlide = (kicker, title, content, needs, steps, expects, note) => {
   const s = newSlide();
   heading(s, kicker, title);
 
-  // prerequisites strip — the amber panel every test carries
-  const nh = 0.30 + needs.length * 0.235;
-  card(s, M, 1.44, W, nh, CARD_HI);
-  s.addText("WHAT YOU NEED FIRST", {
-    x: M + 0.3, y: 1.55, w: 3.0, h: 0.22, fontSize: 9.5, bold: true,
-    color: AMBER, fontFace: F, charSpacing: 1.5, margin: 0, valign: "top",
-  });
-  needs.forEach((n, i) => {
-    s.addText("\u2022", { x: M + 3.5, y: 1.55 + i * 0.235, w: 0.16, h: 0.22,
-      fontSize: 11, bold: true, color: AMBER, fontFace: F, margin: 0, valign: "top" });
-    s.addText(n, { x: M + 3.72, y: 1.55 + i * 0.235, w: W - 4.1, h: 0.22,
-      fontSize: 10.5, color: BODY, fontFace: F, margin: 0, valign: "top" });
+  // Two prerequisites, kept apart on purpose. A customer who uploads the pack piece by
+  // piece needs to know which CONTENT ITEMS must be on the tenant, separately from the
+  // TENANT SETUP they configure themselves.
+  const colW = (W - 2.6) / 2;
+  const cx1 = M + 1.9, cx2 = M + 1.9 + colW + 0.5;
+  // wrap-aware: an item that wraps must push the next one down, or they overlap
+  const lay = (items, w) => {
+    let y = 0; const out = [];
+    items.forEach(t => { const n = wrapLines(t, "text", w); out.push([t, y, n]); y += n * 0.205 + 0.04; });
+    return [out, y];
+  };
+  const [cLay, cH] = lay(content, colW);
+  const [nLay, nH] = lay(needs, colW);
+  const nh = 0.34 + Math.max(cH, nH);
+  card(s, M, 1.40, W, nh, CARD_HI);
+
+  s.addText("PACK CONTENT", { x: M + 0.28, y: 1.54, w: 1.6, h: 0.22, fontSize: 9,
+    bold: true, color: CYAN, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
+  cLay.forEach(([t, dy, n]) => {
+    s.addText("\u2022", { x: cx1 - 0.16, y: 1.54 + dy, w: 0.14, h: 0.22, fontSize: 10,
+      bold: true, color: CYAN, fontFace: F, margin: 0, valign: "top" });
+    s.addText(t, { x: cx1, y: 1.54 + dy, w: colW, h: n * 0.21, fontSize: 10,
+      color: BODY, fontFace: F, margin: 0, lineSpacing: 12, valign: "top" });
   });
 
-  const top = 1.44 + nh + 0.22;
+  s.addText("TENANT SETUP", { x: cx2 - 1.55, y: 1.54, w: 1.5, h: 0.22, fontSize: 9,
+    bold: true, color: AMBER, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
+  nLay.forEach(([t, dy, n]) => {
+    s.addText("\u2022", { x: cx2 - 0.16, y: 1.54 + dy, w: 0.14, h: 0.22, fontSize: 10,
+      bold: true, color: AMBER, fontFace: F, margin: 0, valign: "top" });
+    s.addText(t, { x: cx2, y: 1.54 + dy, w: colW, h: n * 0.21, fontSize: 10,
+      color: BODY, fontFace: F, margin: 0, lineSpacing: 12, valign: "top" });
+  });
+
+  const top = 1.40 + nh + 0.20;
   const sw = 7.0, ew = W - sw - 0.4, ex = M + sw + 0.4;
-
-  // size the two columns to whichever needs more room, then clamp so the note
-  // (and the slide edge at 7.5in) are never overrun
   const NOTE_H = 0.72;
-  const bottom = note ? 7.5 - 0.22 - NOTE_H - 0.16 : 7.5 - 0.3;
+  const bottom = note ? 7.5 - 0.20 - NOTE_H - 0.14 : 7.5 - 0.28;
   const need = Math.max(estH(steps, sw - 0.68), estH(expects, ew - 0.68)) + 0.86;
-  const ch = Math.max(1.9, Math.min(need, bottom - top));
+  const ch = Math.max(1.7, Math.min(need, bottom - top));
 
   card(s, M, top, sw, ch);
-  s.addText("Steps", { x: M + 0.34, y: top + 0.22, w: 3.0, h: 0.28, fontSize: 12,
+  s.addText("Steps", { x: M + 0.34, y: top + 0.2, w: 3.0, h: 0.28, fontSize: 12,
     bold: true, color: ORANGE, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
-  rowList(s, steps, M + 0.34, top + 0.62, sw - 0.68, "num");
+  rowList(s, steps, M + 0.34, top + 0.58, sw - 0.68, "num");
 
   card(s, ex, top, ew, ch, CARD_HI);
-  s.addText("What to expect", { x: ex + 0.34, y: top + 0.22, w: 3.4, h: 0.28, fontSize: 12,
+  s.addText("What to expect", { x: ex + 0.34, y: top + 0.2, w: 3.4, h: 0.28, fontSize: 12,
     bold: true, color: GREEN, fontFace: F, charSpacing: 1, margin: 0, valign: "top" });
-  rowList(s, expects, ex + 0.34, top + 0.62, ew - 0.68, "tick");
+  rowList(s, expects, ex + 0.34, top + 0.58, ew - 0.68, "tick");
 
   if (note) {
-    const ny = top + ch + 0.16;
+    const ny = top + ch + 0.14;
     card(s, M, ny, W, NOTE_H, CARD_HI);
     chip(s, M + 0.26, ny + 0.2, "!", AMBER, 0.32);
     s.addText(note, { x: M + 0.76, y: ny + 0.12, w: W - 1.1, h: NOTE_H - 0.24, fontSize: 10,
@@ -257,6 +274,7 @@ const testSlide = (kicker, title, needs, steps, expects, note) => {
 }
 
 testSlide("Test 1", "Connectivity and authorisation",
+  ["KOI integration (from the Marketplace KOI pack)"],
   ["Marketplace KOI pack installed (it holds the integration)",
    "A KOI API key from the KOI console"],
   ["Settings → Data Sources → Add an instance → search KOI.",
@@ -270,6 +288,8 @@ testSlide("Test 1", "Connectivity and authorisation",
 );
 
 testSlide("Test 2", "Event collection",
+  ["KOI integration",
+   "KoiContentExtension Parsing Rule"],
   ["Test 1 passing", "Fetch events enabled on the KOI instance"],
   ["Edit the KOI instance and tick Fetch events, then Save.",
    "Wait for two collection cycles.",
@@ -283,6 +303,8 @@ testSlide("Test 2", "Event collection",
 );
 
 testSlide("Test 3", "Counting alerts correctly",
+  ["KoiContentExtension Parsing Rule",
+   "KOI alerts dashboard"],
   ["Test 2 passing — events present in koi_koi_raw"],
   ["In Query Builder run:",
    ["dataset = koi_koi_raw", "code"],
@@ -296,6 +318,9 @@ testSlide("Test 3", "Counting alerts correctly",
 );
 
 testSlide("Test 4", "Alert triage",
+  ["KOI Ext IR - Alert Triage",
+   "KOI Ext IR - Extract Alert Context",
+   "19 KOI incident fields + incident type"],
   ["Test 1 passing", "A KOI alert in XSIAM"],
   ["Open a KOI alert.",
    "Attach the triage playbook, or run:",
@@ -309,6 +334,9 @@ testSlide("Test 4", "Alert triage",
 );
 
 testSlide("Test 5", "Item and device investigation",
+  ["KOI Ext IR - Investigate Item",
+   "KOI Ext IR - Investigate Device",
+   "KOI Ext IR - Enrich Item"],
   ["Test 1 passing",
    "An item id and its marketplace, and a hostname",
    "Nothing else — the XQL engine XSIAM uses for execution evidence is built in"],
@@ -323,6 +351,8 @@ testSlide("Test 5", "Item and device investigation",
 );
 
 testSlide("Test 6", "Gated response",
+  ["KOI Ext IR - Block and Remediate",
+   "KOI Ext IR - Investigate Item"],
   ["Test 1 passing", "An item id and marketplace", "Permission to approve a task"],
   ["Automation → Playbooks → KOI Ext IR - Block and Remediate → Run.",
    "Supply item_id and marketplace.",
@@ -336,6 +366,9 @@ testSlide("Test 6", "Gated response",
 );
 
 testSlide("Test 7", "Proactive hunting",
+  ["KOI Ext Hunting - MCP Server Audit",
+   "KOI Ext Hunting - Hunt Sweep",
+   "KOI Ext Hunting - Hunt Match Investigation"],
   ["Test 1 passing",
    "Nothing else — the hunt sweep queries xdr_data, which XSIAM holds natively"],
   ["Automation → Playbooks → KOI Ext Hunting - MCP Server Audit → Run.",
@@ -349,17 +382,19 @@ testSlide("Test 7", "Proactive hunting",
 );
 
 testSlide("Test 8", "Script Runner — refresh the tracker",
+  ["KOI Ext Script Runner - Refresh Job",
+   "KOI Ext Script Runner - Refresh Entry",
+   "KoiScanTracker  (our automation \u2014 not the KOI script)",
+   "List: Koi Script Runner"],
   ["Core REST API integration instance configured  ← the one people miss",
    "The KOI deployment script — download it from YOUR KOI console, then upload it to Action Center → Scripts Library. This is KOI\'s script, not a Cortex one. It must take no parameters",
-   "An endpoint group — easiest is to tag the agents, then make a dynamic group on that tag",
-   'A JSON List named exactly "Koi Script Runner" — sample content ships with this pack'],
+   "An endpoint group — tag the agents, then use a dynamic group",
+   'The Koi Script Runner List created (step 1)'],
   ["Settings → Object Setup → Lists → New List, type JSON, named exactly Koi Script Runner.",
-   "Paste the sample list content that ships with this pack (see the pack README), then edit it.",
-   "Set endpoint_groups to your group name and script.name to the KOI script exactly as it appears in Action Center.",
-   "Add one entry per operating system you deploy to — each entry pairs one script with one OS.",
-   "tracker_list and rescan_interval_hours already carry working defaults — leave them unless you want a different rescan window.",
-   "Automation → Jobs → New Job → time-triggered → playbook KOI Ext Script Runner - Refresh Job.",
-   "Enable the Job, then Run now."],
+   "Open Lists/list-Koi_Script_Runner.json in the pack, copy its data value, and paste it in.",
+   "Edit two things only: endpoint_groups (your group) and script.name (the KOI script exactly as it appears in Action Center). One entry per OS.",
+   "Everything else — tracker_list, rescan_interval_hours, max_endpoints — already has working defaults.",
+   "Automation → Jobs → New Job, time-triggered, playbook KOI Ext Script Runner - Refresh Job. Enable it, then Run now."],
   ["A tracker List appears under Lists, named as in your entry.",
    "It fills with one row per endpoint: an id and a last-scan value.",
    "Re-running adds new endpoints without disturbing existing rows."],
@@ -367,6 +402,10 @@ testSlide("Test 8", "Script Runner — refresh the tracker",
 );
 
 testSlide("Test 9", "Script Runner — scan due endpoints",
+  ["KOI Ext Script Runner - Scan Job",
+   "KOI Ext Script Runner - Process Config Entry",
+   "KOI Ext Script Runner - Execute Endpoint Script",
+   "KoiScanTracker  (our automation)"],
   ["Test 8 passing — the tracker List has rows",
    "Connected agents in the group, matching the entry's endpoint_os"],
   ["Automation → Jobs → New Job → time-triggered → playbook KOI Ext Script Runner - Scan Job.",
@@ -381,6 +420,9 @@ testSlide("Test 9", "Script Runner — scan due endpoints",
 );
 
 testSlide("Test 10", "Alert fields and layout",
+  ["19 KOI incident fields",
+   "KOI Supply Chain Alert incident type",
+   "its layout"],
   ["Test 4 passing — triage has run on an alert",
    "The incident type and layout installed with this pack"],
   ["Open an alert that triage has processed.",
